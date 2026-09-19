@@ -216,3 +216,15 @@ What makes a landed punch feel like one; nothing here touches the physics. Power
 - **No visual flash.** A burst sprite at the glove and an emissive blink on the victim were both tried; the user wanted neither.
 - **Sound**: synthesized with WebAudio, no assets — noise crack through a lowpass + a sine thud dropping to 42 Hz on a hit (duller when blocked), a quiet band-passed whoosh when a punch is thrown. The AudioContext is created on the first key press (browser gesture rule).
 - Knobs (URL-tunable, 0 = off): `fxStop`, `fxShake`, `fxVol`. Solo ball hits use 0.8 × the punch's table damage.
+
+---
+
+# Knockdown (R4) — 2026-09-19
+
+Sim (unchanged logic): hp ≤ 0 → `down`; first knockdown rises after `COUNT_SECONDS` (now 6 s) with 38 hp / 60 stamina; the second is a KO.
+- **Fall is procedural**, not mocap: Mixamo's *Knocked Out* stumbles forward into the opponent and spins, so the kinematic hips instead slide 0.55 m straight back (decelerating), drop ≈0.77 m (accelerating) and tip over onto the clip's lying pose, re-oriented so the head always points away from the opponent — 1.1 s (`koFallT`, `koBack`). Only the legs come from the clip (scrubbed so they are lying when the hips arrive).
+- **Upper body is a limp ragdoll** thrown by the knockout punch: arm motors at `koRelax` 0.05; spine + neck start limp (head snaps back) and firm up to `koSpine` 0.35 as he lands so he lies straight. While down the spine target is taken relative to the CLIP's own hips (ours are re-oriented — using them twisted the torso 80° sideways). A real floor collider catches the body.
+- **Get-up**: *Getting Up* f72–190 played over `koGetupT` 2.8 s, ending exactly when the sim flips to idle. Its hips track is read straight from the clip (not the mixer), turned to lie the way he fell, and cross-blended with the lying pose over 0.4 s; the 8° of leftover yaw, the sideways drift and 3 cm of height error are blended out while he rises. Motors ramp back to full with the rise. He ends ≈0.1 m from where he was hit; `sim.x` is moved there.
+- **Slow-motion only on a knockdown**: ×0.25 for 0.9 real seconds, eased back over 0.4 s; the knockout punch gets a 180 ms hit-stop, a bigger jolt and a deeper sound; the body landing gets a floor thud.
+- Count overlay in sim time (up at 8, out at 10 → "K.O."), **R** = rematch. The CPU backs off to a neutral corner while the player is down; nobody can hit or be hit while down; punches at a downed opponent aim where his head would be if he stood.
+- Harness: `dev/knockdown.js` (`run('A'|'B', { stopAt, final })`).

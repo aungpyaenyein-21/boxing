@@ -22,7 +22,7 @@ export const C = {
   ROUND_SECONDS: 90,     // Punchers feels too short — was 45 in doc
   REST_SECONDS: 3,
   REST_HP: 24,
-  COUNT_SECONDS: 4,
+  COUNT_SECONDS: 6,      // fall ≈2 s + on the canvas + get up ≈2.8 s (the ragdoll layer times its clips to this)
   RISE_HP: 38,
   RISE_STAMINA: 60,      // ponytail: doc is silent, pick something punishing but playable
   MAX_KNOCKDOWNS: 2,

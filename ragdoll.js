@@ -8,10 +8,10 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import RAPIER from 'rapier'
 import { PUNCH, C } from './sim/constants.js?v=2'
 import { makeBoxer as makeSim, stepBoxer, punchPhase, resolveHit } from './sim/combat.js?v=2'
-import { createFx } from './fx.js?v=6'
+import { createFx } from './fx.js?v=7'
 
 await RAPIER.init()
-const ui = document.getElementById('ui')
+const ui = document.getElementById('ui'), big = document.getElementById('big')
 const W = () => innerWidth || 800, H = () => innerHeight || 450
 
 // ---------- scene ----------
@@ -33,7 +33,7 @@ const loader = new FBXLoader()
 const src = await loader.loadAsync('models/Y Bot.fbx')
 let prefix = 'mixamorig'
 src.traverse(o => { const m = o.name.match(/^(mixamorig\d*)Hips$/); if (m) prefix = m[1] })
-const CLIP_FILES = { idle: 'Idle', block: 'Center Block', jab: 'left jab', cross: 'Cross Punch', hookR: 'Hook Punch', hookL: 'left hook', upperL: 'left uppercut', upperR: 'right uppercut' }
+const CLIP_FILES = { idle: 'Idle', block: 'Center Block', jab: 'left jab', cross: 'Cross Punch', hookR: 'Hook Punch', hookL: 'left hook', upperL: 'left uppercut', upperR: 'right uppercut', ko: 'Knocked Out', getup: 'Getting Up' }
 const clips = {}
 for (const [n, f] of Object.entries(CLIP_FILES)) {
   const c = (await loader.loadAsync('models/' + f + '.fbx')).animations[0]
@@ -46,6 +46,10 @@ clips.hookR = THREE.AnimationUtils.subclip(clips.hookR, 'hookR', 18, 52, 30)   /
 // new Mixamo 'left jab' / 'left hook' (2026-09-13): strike spans measured on the target skeleton
 clips.jab = THREE.AnimationUtils.subclip(clips.jab, 'jab', 4, 22, 30)      // extension peaks f10–12
 clips.hookL = THREE.AnimationUtils.subclip(clips.hookL, 'hookL', 6, 30, 30) // load f8–12, swing across f14–18, settle f30
+// knockdown: 'Knocked Out' stands still for 1.2 s, then staggers back ≈1.3 m and drops onto its back (lying by f100);
+// 'Getting Up' lies on its back until f72, stands by f180. Both carry root motion in the Hips position track.
+clips.ko = THREE.AnimationUtils.subclip(clips.ko, 'ko', 40, 168, 30)
+clips.getup = THREE.AnimationUtils.subclip(clips.getup, 'getup', 72, 190, 30)
 // uppercuts (2026-09-19): both takes are BODY uppercuts — the fist dips to the waist, then drives forward at belly height.
 // The clip supplies the knee bend, the dip and the bent arm; drivePunch lifts the fist up through the chin.
 clips.upperL = THREE.AnimationUtils.subclip(clips.upperL, 'upperL', 16, 40, 30)   // hand drops f16–24, drives f24–28, back by f40
@@ -85,6 +89,7 @@ const P = {
   lunge: 0.16, lungeJab: 0.12,                                             // hips step in during a punch (m) — Punchers cross ≈ 20–30cm (less here: the kinematic hips drag the torso)
   through: 0.26, throughClipHook: 0.3, clipDamp: 0, clipRate: 1.25, hookArc: 0.45,
   upperUnder: 0.28, upperThrough: 0.22, upperBack: 0.04, upperSplit: 0.45, upperYaw: 45, upperRange: 0.32, lungeUpperMin: 0.1, lungeUpperMax: 0.4, upperNear: 0.22, upperStepT: 0.6, upperMul: 1.3, upperUpright: 0.8, upperFollow: 0.3, upperReach: 0.38, upperRelax: 0.3,   // uppercut: under the chin by upperSplit of the drive, then straight up through it
+  koRelax: 0.05, koSlow: 0.25, koSlowT: 0.9, koGetupT: 2.8, koFallT: 1.1, koBack: 0.55, koSpine: 0.35,   // knockdown: motor strength while down, slow-motion scale + real seconds, get-up duration (s), fall duration (s) and how far back he goes (m)
   fxStop: 1, fxShake: 1, fxVol: 0.5,   // impact pack (fx.js): hit-stop / camera shake / sound — 0 turns one off
   kY: 2.5, dY: 40, aimSide: 0, aimLead: 1.5, holdDist: 0.1, easeCross: 0.9, hookLead: 45, hookPast: 50, hookHold: 60, hookD: 30, hookGate: 0.65, hookRmin: 0.32, hookRmax: 0.5,                 // straight-punch aim offset to the glove's own side; brake only within holdDist of the target; rear-hook sweep ease + max arc radius                                             // punch-through depth (straightens the elbow), hook side offset
   hookWind: 0.35, hookFollow: 0.5, hookYaw: 50,                            // hook: glove pulled back+out on windup, swings past the target, torso rotates more
@@ -225,9 +230,58 @@ if (SOLO) {
     if (e.key === ']') ballHome.x += 0.05
   })
 }
-const targetHead = bx => ball ? ball.translation() : (bx === A ? B : A).b.head.translation()
+const standHead = { x: 0, y: 1.55, z: 0 }
+const targetHead = bx => { if (ball) return ball.translation(); const o = bx === A ? B : A; if (o.sim.state !== 'down') return o.b.head.translation()
+  standHead.x = o.sim.x + o.facing * 0.1; return standHead }   // a downed opponent's head is on the canvas: aim where it would be
 
 const UPPER = { leadupper: true, upper: true }, QID = new THREE.Quaternion()
+
+// ---------- knockdown (R4) ----------
+// The kinematic hips follow the root motion of 'Knocked Out' (stagger back, drop onto the back) and later 'Getting Up';
+// the legs copy those clips like any other; the upper body is a limp ragdoll (motors at koRelax) thrown by the knockout punch,
+// lying on a real floor. Hips tracks are read straight from the clips (not from the mixer) so the two clips can be
+// cross-blended in the boxer's own frame — their clip spaces don't line up.
+world.createCollider(RAPIER.ColliderDesc.cuboid(30, 0.05, 30).setTranslation(0, -0.05, 0).setCollisionGroups((1 << 14) << 16 | 0xffff))   // the canvas
+const hipsTracks = name => { const c = clips[name], n = prefix + 'Hips'
+  return { pos: c.tracks.find(t => t.name === n + '.position').createInterpolant(), quat: c.tracks.find(t => t.name === n + '.quaternion').createInterpolant(), dur: c.duration } }
+const KO = hipsTracks('ko'), GU = hipsTracks('getup')
+const kp = new THREE.Vector3(), kq = new THREE.Quaternion(), gp = new THREE.Vector3(), gq = new THREE.Quaternion(), kyaw = new THREE.Quaternion(), kv = new THREE.Vector3(), Y_UP = new THREE.Vector3(0, 1, 0)
+const clamp01 = x => Math.max(0, Math.min(1, x)), wrapPi = a => Math.atan2(Math.sin(a), Math.cos(a))
+function hipsAt(bx, trk, t, outP, outQ) {   // clip hips at time t → world position + rotation delta from the guard pose (for this boxer's facing)
+  const par = bx.follow[0].t.parent, tt = Math.min(t, trk.dur - 1e-4)
+  const p = trk.pos.evaluate(tt); outP.set(p[0], p[1], p[2]).applyMatrix4(par.matrixWorld)
+  const q = trk.quat.evaluate(tt); kyaw.set(q[0], q[1], q[2], q[3]); par.getWorldQuaternion(outQ).multiply(kyaw).multiply(kyaw.copy(bx.hipsQ0).invert())
+}
+function calibrateKnockdown(bx) {
+  const yawOf = q => { kv.set(0, 0, 1).applyQuaternion(q); return Math.atan2(kv.x, kv.z) }      // which way a STANDING pose faces
+  const lieDir = q => { kv.set(0, 1, 0).applyQuaternion(q); return Math.atan2(kv.x, kv.z) }     // where the spine points when LYING (toward the head)
+  const p0 = new THREE.Vector3(), pE = new THREE.Vector3(), pg = new THREE.Vector3(), pgE = new THREE.Vector3(), q = new THREE.Quaternion()
+  const lieTarget = Math.atan2(-bx.facing, 0)                            // on his back, head pointing AWAY from the opponent
+  hipsAt(bx, KO, 0, p0, q); hipsAt(bx, KO, KO.dur, pE, q)
+  const qLie = q.clone().premultiply(new THREE.Quaternion().setFromAxisAngle(Y_UP, lieTarget - lieDir(q)))   // the clip's lying pose, turned that way
+  hipsAt(bx, GU, 0, pg, q); const aGU = lieTarget - lieDir(q)            // the get-up clip lies the same way…
+  hipsAt(bx, GU, GU.dur, pgE, q); const psi = wrapPi(yawOf(q) + aGU)     // …which leaves it standing psi off the fight line: turned out while rising
+  const dropY = pE.y - p0.y
+  bx.kd = { qLie, dropY, aGU, psi, pg, errY: dropY + (pgE.y - pg.y) }
+}
+const tRise = () => C.COUNT_SECONDS - P.koGetupT                         // sim-time at which the get-up starts
+const riseOf = s => s.knockdowns >= C.MAX_KNOCKDOWNS ? 0 : smooth(clamp01((s.stateTime - tRise()) / P.koGetupT))   // 0 lying … 1 on the feet
+function knockdownPose(bx) {   // → kp (hips offset from where the boxer stood) and kq (hips rotation), both in world axes
+  const s = bx.sim, k = bx.kd, t = s.stateTime
+  // The FALL is procedural: the mocap take stumbles forward into the opponent and spins. Here he always goes straight back, away
+  // from the punch: slides back decelerating, drops accelerating, tips over onto the clip's lying pose. Only the legs come from the clip.
+  const u = clamp01(t / P.koFallT), back = 1 - (1 - u) * (1 - u)
+  kp.set(-bx.facing * P.koBack * back, k.dropY * u * u, 0); kq.copy(QID).slerp(k.qLie, smooth(Math.pow(u, 1.3)))
+  if (s.knockdowns < C.MAX_KNOCKDOWNS && t > tRise() - 0.4) {
+    const up = riseOf(s), a = k.aGU - k.psi * up
+    hipsAt(bx, GU, Math.max(0, t - tRise()) * GU.dur / P.koGetupT, gp, gq)
+    gp.sub(k.pg).applyAxisAngle(Y_UP, a); gp.x -= bx.facing * P.koBack; gp.y += k.dropY - k.errY * up; gp.z *= 1 - up   // from where he lies; back on the fight line and at guard height once up
+    gq.premultiply(kyaw.setFromAxisAngle(Y_UP, a))
+    const w = smooth(clamp01((t - (tRise() - 0.4)) / 0.4)); kp.lerp(gp, w); kq.slerp(gq, w)
+  }
+}
+for (const bx of boxers) calibrateKnockdown(bx)
+
 // ---------- motors (R1) ----------
 const qp = new THREE.Quaternion(), qb = new THREE.Quaternion(), qe = new THREE.Quaternion(), qd = new THREE.Quaternion(), qpd = new THREE.Quaternion(), qi = new THREE.Quaternion()
 const fwd = new THREE.Vector3(), yawQ = new THREE.Quaternion(), Y_AXIS = new THREE.Vector3(0, 1, 0)
@@ -246,6 +300,8 @@ function applyMotors(bx, dt) {
       ps.tbone.getWorldQuaternion(qpd).multiply(qi.copy(ps.q0).invert())
       if (bx.mirror) qpd.set(-qpd.x, -qpd.y, qpd.z, qpd.w)
       qd.premultiply(qpd.invert())
+    } else if (bx.down) {   // knockdown: our hips are re-oriented (he always falls straight back), so take the spine RELATIVE TO THE CLIP'S OWN hips
+      bx.follow[0].t.getWorldQuaternion(qpd).multiply(qi.copy(bx.hipsQ0).invert()); qd.premultiply(qpd.invert())
     } else {   // parent is the kinematic hips: use exactly the rotation we gave them
       qd.premultiply(qpd.copy(bx.hipsDelta).invert())
       // uppercut: the mocap takes are body shots that fold the torso ~45° forward; a chin uppercut drives UP, so keep most of it upright
@@ -257,7 +313,7 @@ function applyMotors(bx, dt) {
     const angle = 2 * Math.acos(Math.min(1, qe.w)), sn = Math.sqrt(Math.max(0, 1 - qe.w * qe.w))
     if (sn > 1e-6) axis.set(qe.x / sn, qe.y / sn, qe.z / sn); else axis.set(0, 0, 0)
     const wb = m.body.angvel(), wp = m.parent.angvel()
-    let relax = bx.stun * (m.arm ? (m.elbow && bx.hooking ? Math.max(bx.arm[m.arm], P.hookElbow) : bx.arm[m.arm]) : 1)
+    let relax = (m.arm ? bx.stun : bx.spineStun ?? bx.stun) * (m.arm ? (m.elbow && bx.hooking ? Math.max(bx.arm[m.arm], P.hookElbow) : bx.arm[m.arm]) : 1)
     if (m.part.name === 'head' && (bx.sim.state === 'punch' || bx.sim.guard || bx.sincePunch < 0.3)) relax *= P.neckBoost
     if (m.part.name === 'torso' && ((bx.sim.state === 'punch' && punchPhase(bx.sim) === 'recovery') || (bx.sim.state === 'idle' && bx.sincePunch < 0.25))) relax *= P.unwindRelax
     const w0 = 2 * Math.PI * m.f * P.kMul * Math.sqrt(relax)
@@ -306,7 +362,13 @@ function playTarget(bx, name, timeScale = 1, fade = 0.06, force = false) {
 function syncTarget(bx, dt) {
   const s = bx.sim
   if (s.state === 'punch') { bx.sincePunch = 0; bx.lastHand = s.punchHand } else bx.sincePunch = (bx.sincePunch ?? 9) + dt
-  if (s.state === 'punch') {
+  if (s.state === 'down') {
+    const rising = s.knockdowns < C.MAX_KNOCKDOWNS && s.stateTime > tRise() - 0.4
+    if (!rising && bx.cur !== 'ko') playTarget(bx, 'ko', 0, 0.12, true)
+    if (rising && bx.cur !== 'getup') playTarget(bx, 'getup', 0, 0.4, true)
+    bx.actions.ko.time = Math.min(s.stateTime / P.koFallT * 2.0, clips.ko.duration - 1e-3)   // the take is lying by 2.0 s: its legs arrive when the procedural fall does
+    bx.actions.getup.time = Math.min(Math.max(0, s.stateTime - tRise()) * clips.getup.duration / P.koGetupT, clips.getup.duration - 1e-3)
+  } else if (s.state === 'punch') {
     let name = s.punch === 'hook' ? 'hook' + s.punchHand : s.punch === 'leadhook' ? 'hookL' : s.punch === 'leadupper' ? 'upperL' : s.punch === 'upper' ? 'upperR' : s.punch   // jab / cross / hookL / hookR / upperL / upperR
     const mirror = false                     // hookL is now the real Hook.fbx (mirroring kept as an option)
     if (bx.cur !== name || bx.mirror !== mirror) {
@@ -340,6 +402,7 @@ function syncTarget(bx, dt) {
 const chin = new THREE.Vector3()
 function driveGuard(bx, dt) {
   const s = bx.sim
+  if (s.state === 'down') return
   let recovering = (s.state === 'punch' && punchPhase(s) === 'recovery') || (s.state === 'idle' && bx.sincePunch < 0.2)
   if (s.state === 'punch' && (s.punch === 'hook' || s.punch === 'leadhook' || UPPER[s.punch])) {   // hooks / uppercuts follow through first, then snap back
     const p = PUNCH[s.punch], f = s.punchT
@@ -389,6 +452,7 @@ const handSide = (bx, hand) => (hand === 'R' ? 1 : -1) * bx.facing
 const gv = new THREE.Vector3(), tv = new THREE.Vector3(), fv = new THREE.Vector3(), up = new THREE.Vector3(), sv = new THREE.Vector3()
 function drivePunch(bx, opp, dt) {
   const s = bx.sim, ph = punchPhase(s)
+  if (s.state === 'down') return
   const hand = s.punchHand
   if (s.state !== 'punch') {
     bx.hooking = false
@@ -510,7 +574,7 @@ function drivePunch(bx, opp, dt) {
 }
 
 // ---------- contact → hit (R3) ----------
-let lastHit = ''
+let lastHit = '', slowT = 0   // slowT: real seconds of knockdown slow-motion left
 function onContact(h1, h2) {
   const a = colMap.get(h1), b = colMap.get(h2)
   if (!a || !b || a.boxer === b.boxer) return
@@ -526,6 +590,7 @@ function onContact(h1, h2) {
     }
     if (g.part !== 'glove' || (t.part !== 'head' && t.part !== 'torso')) continue
     const s = g.boxer.sim
+    if (t.boxer.sim.state === 'down') continue
     if (s.state !== 'punch' || s.hitApplied || punchPhase(s) === 'windup' || g.hand !== s.punchHand) continue
     const target = t.part === 'head' ? 'head' : 'body'
     const r = resolveHit(s, t.boxer.sim, target)
@@ -533,7 +598,9 @@ function onContact(h1, h2) {
     const J = r.dmg * P.hitImpulse * (r.blocked ? 0.3 : 1)
     const body = target === 'head' ? t.boxer.b.head : t.boxer.b.torso
     body.applyImpulse({ x: g.boxer.facing * J, y: J * 0.15, z: 0 }, true)
-    fx.hit(r.dmg / (r.blocked ? C.GUARD_FACTOR : 1), r.blocked)
+    const knocked = t.boxer.sim.state === 'down'
+    fx.hit(r.dmg / (r.blocked ? C.GUARD_FACTOR : 1), r.blocked, knocked)
+    if (knocked) { slowT = P.koSlowT + 0.4; t.boxer.thudded = false }   // slow motion ONLY on a knockdown
     lastHit = `${g.boxer.idx === 0 ? 'A' : 'B'} ${s.punch}${s.punchHand} → ${target} ${r.dmg.toFixed(1)}${r.blocked ? ' (blocked)' : ''}${r.counter ? ' COUNTER' : ''}`
   }
 }
@@ -541,7 +608,7 @@ function onContact(h1, h2) {
 // ---------- bone follow ----------
 const bm = new THREE.Matrix4(), pm = new THREE.Matrix4(), lm = new THREE.Matrix4(), tq = new THREE.Quaternion(), ts = new THREE.Vector3(), tvv = new THREE.Vector3()
 function syncBones(bx) {
-  bx.model.position.x = bx.sim.x + bx.facing * bx.lungeX
+  bx.model.position.x = bx.sim.x + bx.facing * bx.lungeX + (bx.down ? bx.kdX : 0); bx.model.position.z = bx.down ? bx.kdZ : 0
   for (const f of bx.follow) {
     if (!P.followLegs) break
     if (f.b.name.endsWith('Hips')) {
@@ -568,13 +635,19 @@ addEventListener('keydown', e => {
   if ([' ', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault()
   if (e.repeat) return
   keys[e.key.toLowerCase()] = true
+  if (e.key.toLowerCase() === 'r') rematch()
   if (e.key === 'ArrowLeft') queued = { punch: e.shiftKey ? 'leadupper' : keys[' '] ? 'leadhook' : 'jab', hand: 'L' }   // 5 / 3 / 1
   if (e.key === 'ArrowRight') queued = { punch: e.shiftKey ? 'upper' : keys[' '] ? 'hook' : 'cross', hand: 'R' }      // 6 / 4 / 2
 })
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false })
+function rematch() {   // fresh fight: everything the sim tracks, back in the corners
+  for (const bx of boxers) { Object.assign(bx.sim, makeSim(bx === A ? -0.9 : 0.9)); bx.down = false; bx.lungeX = 0; bx.prevHx = undefined }
+  lastHit = ''; slowT = 0
+}
 let cpuTimer = 0
 function cpuInput(dt) {   // dummy: jab when in range every 1.6s
   if (window.__forceB) { const f = window.__forceB; window.__forceB = null; return f }   // debug hook
+  if (A.sim.state === 'down') return { move: B.sim.x - A.sim.x < 1.7 ? 1 : 0, guard: false, lean: false, punch: null }   // opponent is down: back off to a neutral corner
   cpuTimer += dt
   const inRange = Math.abs(A.sim.x - B.sim.x) < 1.2
   if (cpuTimer > 1.6 && inRange && B.sim.state === 'idle') {
@@ -593,19 +666,28 @@ const clock = new THREE.Clock()
 const draw = () => { fx.apply(); renderer.render(scene, camera); fx.restore() }
 function frame(dt) {
   if (fx.step(dt)) { draw(); return }   // hit-stop: the world holds still for a few frames, only the effects move
+  if (slowT > 0) { slowT -= dt; dt *= slowT > 0.4 ? P.koSlow : 1 - (1 - P.koSlow) * Math.max(0, slowT) / 0.4 }   // knockdown slow-motion, eased back to real time
   const inA = { move: (keys.d ? 1 : 0) - (keys.a ? 1 : 0), guard: !!keys.s, lean: !!keys.w, punch: queued && queued.punch, hand: queued && queued.hand }
   stepBoxer(A.sim, inA, dt); if (B) stepBoxer(B.sim, cpuInput(dt), dt); queued = null
   if (B && B.sim.x - A.sim.x < C.MIN_GAP) { const c = (A.sim.x + B.sim.x) / 2; A.sim.x = c - C.MIN_GAP / 2; B.sim.x = c + C.MIN_GAP / 2 }
   for (const bx of boxers) {
     syncTarget(bx, dt)
-    bx.stun = bx.sim.state === 'hit' ? P.stunRelax : bx.sim.state === 'down' ? 0.02 : 1
+    const down = bx.sim.state === 'down'
+    if (bx.down && !down) { bx.sim.x = Math.max(-C.RING_HALF, Math.min(C.RING_HALF, bx.sim.x + bx.kdX)); bx.prevHx = undefined }   // back on his feet: he stands where he got up
+    bx.down = down
+    bx.stun = bx.sim.state === 'hit' ? P.stunRelax : down ? P.koRelax + (1 - P.koRelax) * riseOf(bx.sim) : 1   // limp on the canvas, strength returns as he rises
+    // spine + neck: limp at the moment of the punch (the head snaps back), then firm enough to lie the way the clip lies —
+    // fully limp, the torso folded 80° sideways at the waist once it was down
+    bx.spineStun = down ? Math.max(bx.stun, P.koRelax + (P.koSpine - P.koRelax) * smooth(clamp01(bx.sim.stateTime / P.koFallT))) : bx.stun
     const th = bx.follow[0].t   // target Hips
     bx.crouchT = (bx.crouchT || 0) + dt
     const crouch = P.crouch * Math.max(0, Math.sin(bx.crouchT * 0.9 + bx.idx * 2) - 0.6) / 0.4   // occasional deeper dip
     bx.bobY = (th.position.y - bx.hipsRestY) * 0.01 * P.bobGain - crouch - (bx.sim.guard ? P.blockCrouch : 0)
     const bob = bx.bobY
-    const hx = bx.sim.x + bx.hipsLocal + bx.facing * bx.lungeX, hy = bx.hipsY + bob
-    bx.hips.setNextKinematicTranslation({ x: hx, y: hy, z: 0 })
+    if (down) { knockdownPose(bx); bx.kdX = kp.x; bx.kdZ = kp.z; bx.bobY = kp.y }
+    const hx = bx.sim.x + bx.hipsLocal + bx.facing * bx.lungeX + (down ? kp.x : 0), hy = bx.hipsY + (down ? kp.y : bob), hz = down ? kp.z : 0
+    bx.hips.setNextKinematicTranslation({ x: hx, y: hy, z: hz })
+    if (down && !bx.thudded && hy < 0.4) { bx.thudded = true; fx.thud() }   // the body meets the canvas
     // the hips are kinematic (infinite mass): when they accelerate, give every body the same Δv so the
     // upper body translates WITH the hips instead of lagging behind (a lagging torso reads as a shove)
     const vx = bx.prevHx === undefined ? 0 : (hx - bx.prevHx) / dt, vy = bx.prevHy === undefined ? 0 : (hy - bx.prevHy) / dt
@@ -628,6 +710,7 @@ function frame(dt) {
     // has already gone back to idle. Cutting it at the state change snapped the hips ~12° (read as a stagger).
     const env = bx.yawAmp ? Math.min(1, bx.lungeX / bx.yawAmp) : 0
     if (bx.yawDir) qd.premultiply(yawQ.setFromAxisAngle(Y_AXIS, bx.yawDir * env * bx.yawAmt * Math.PI / 180))
+    if (down) qd.copy(kq)   // knockdown: the clip's full hip rotation (fixed yaw offset), not the yaw-stripped tilt
     if (!P.hipsRot) qd.identity()
     bx.hipsDelta.copy(qd)
     bx.hips.setNextKinematicRotation({ x: qd.x, y: qd.y, z: qd.z, w: qd.w })
@@ -654,8 +737,14 @@ function frame(dt) {
   ui.textContent = (B
     ? `M2 legs+hips mocap   A hp ${A.sim.hp.toFixed(0)} st ${A.sim.stamina.toFixed(0)} ${st(A.sim)}   |   B hp ${B.sim.hp.toFixed(0)} ${st(B.sim)}\n`
     : `SOLO — target ball   st ${A.sim.stamina.toFixed(0)} ${st(A.sim)}   thrown ${A.sim.stats.thrown}  hit ${ballHits}\n`) +
-    `last hit: ${lastHit}\nA/D move  S guard  ← jab(1)  → cross(2)  Space+← lead hook(3)  Space+→ rear hook(4)  Shift+← lead uppercut(5)  Shift+→ rear uppercut(6)` +
+    `last hit: ${lastHit}\nA/D move  S guard  ← jab(1)  → cross(2)  Space+← lead hook(3)  Space+→ rear hook(4)  Shift+← lead uppercut(5)  Shift+→ rear uppercut(6)  R rematch` +
     (B ? `   (B punches back on its own)` : `   ↑/↓ ball height  [ ] ball distance (${(ballHome.x - A.sim.x).toFixed(2)} m)`)
+  const dn = boxers.find(b => b.sim.state === 'down')
+  if (!dn) big.textContent = ''
+  else {   // referee's count in sim time: up at 8, out at 10
+    const t = dn.sim.stateTime, out = dn.sim.knockdowns >= C.MAX_KNOCKDOWNS, n = Math.floor(t / (C.COUNT_SECONDS / 8)) + 1
+    big.textContent = t < 1 ? '' : out && n > 10 ? `K.O.\n${dn === A ? 'B' : 'A'} wins — R: rematch` : String(Math.min(n, out ? 10 : 8))
+  }
   draw()
 }
 window.__frame = frame

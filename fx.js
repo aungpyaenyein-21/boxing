@@ -44,11 +44,22 @@ export function createFx(THREE, camera, P) {
   }
 
   // ---- the one call the game makes when a glove lands ----
-  function hit(power, blocked = false) {
-    const k = Math.min(1, power / 16) * (blocked ? 0.5 : 1)
+  function hit(power, blocked = false, ko = false) {   // ko: the punch that puts him down — longer freeze, bigger jolt, deeper sound
+    const k = ko ? 1.8 : Math.min(1, power / 16) * (blocked ? 0.5 : 1)
     stop = Math.max(stop, P.fxStop * (0.02 + 0.085 * k))                 // ≈35 ms jab … 105 ms rear hook
     shakeAmp = Math.max(shakeAmp, P.fxShake * (0.012 + 0.06 * k)); shakeT = 0
-    sfxHit(power, blocked)
+    sfxHit(ko ? 22 : power, blocked)
+  }
+
+  function thud() {   // a body landing on the canvas
+    shakeAmp = Math.max(shakeAmp, P.fxShake * 0.035); shakeT = 0
+    if (!actx || !P.fxVol) return
+    const t = actx.currentTime; master.gain.value = P.fxVol
+    const n = noise(0.25, x => Math.pow(1 - x, 2)), lp = actx.createBiquadFilter(), g = actx.createGain()
+    lp.type = 'lowpass'; lp.frequency.value = 260; g.gain.value = 0.9; n.connect(lp).connect(g).connect(master); n.start(t)
+    const o = actx.createOscillator(), og = actx.createGain()
+    o.type = 'sine'; o.frequency.setValueAtTime(85, t); o.frequency.exponentialRampToValueAtTime(34, t + 0.22)
+    og.gain.setValueAtTime(1.1, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.3); o.connect(og).connect(master); o.start(t); o.stop(t + 0.32)
   }
 
   // advance the shake; returns true while the hit-stop holds the world (caller skips its simulation step, still draws)
@@ -65,5 +76,5 @@ export function createFx(THREE, camera, P) {
   }
   function restore() { camera.position.sub(offset) }   // …and right after, so controls / follow-cam never see the jolt
 
-  return { unlock, hit, whoosh, step, apply, restore, get frozen() { return stop > 0 }, get audio() { return actx ? actx.state : 'locked' } }
+  return { unlock, hit, thud, whoosh, step, apply, restore, get frozen() { return stop > 0 }, get audio() { return actx ? actx.state : 'locked' } }
 }
