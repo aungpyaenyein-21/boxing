@@ -10,6 +10,7 @@ export const PUNCH = {
 }
 
 export const C = {
+  DAMAGE_SCALE: 0.5,     // table damage × this = hp lost. At 1.0 a fight was over in ~11 clean hits (≈20 s); rounds are 90 s for a reason
   COUNTER: 1.5,          // hitting an opponent stuck in recovery
   FATIGUE_SLOW: 1.0,     // punch duration multiplier grows to 1+this at 0 stamina — tired arms are slow arms
   GUARD_FACTOR: 0.18,
@@ -25,7 +26,7 @@ export const C = {
   COUNT_SECONDS: 6,      // fall ≈2 s + on the canvas + get up ≈2.8 s (the ragdoll layer times its clips to this)
   RISE_HP: 38,
   RISE_STAMINA: 60,      // ponytail: doc is silent, pick something punishing but playable
-  MAX_KNOCKDOWNS: 2,
+  MAX_KNOCKDOWNS: 3,     // three-knockdown rule
   RING_HALF: 3,
   MIN_GAP: 0.6,
   HIT_RADIUS: 0.25,      // glove-to-bone contact distance; head/body decided by glove height

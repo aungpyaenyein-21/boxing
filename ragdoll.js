@@ -7,8 +7,9 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import RAPIER from 'rapier'
 import { PUNCH, C } from './sim/constants.js?v=2'
-import { makeBoxer as makeSim, stepBoxer, punchPhase, resolveHit } from './sim/combat.js?v=2'
-import { createFx } from './fx.js?v=7'
+import { makeBoxer as makeSim, stepBoxer, punchPhase, resolveHit, makeMatch, stepMatch } from './sim/combat.js?v=2'
+import { makeAI, stepAI } from './sim/ai.js?v=2'
+import { createFx } from './fx.js?v=8'
 
 await RAPIER.init()
 const ui = document.getElementById('ui'), big = document.getElementById('big')
@@ -30,7 +31,8 @@ addEventListener('resize', () => { camera.aspect = W() / H(); camera.updateProje
 
 // ---------- source model, posed in the guard ----------
 const loader = new FBXLoader()
-const src = await loader.loadAsync('models/Y Bot.fbx')
+const CHAR = new URLSearchParams(location.search).get('char') || 'Y Bot'   // ?char=Ch45_nonPBR … any Mixamo character in models/ (the big ones are not in git)
+const src = await loader.loadAsync(`models/${CHAR}.fbx`)
 let prefix = 'mixamorig'
 src.traverse(o => { const m = o.name.match(/^(mixamorig\d*)Hips$/); if (m) prefix = m[1] })
 const CLIP_FILES = { idle: 'Idle', block: 'Center Block', jab: 'left jab', cross: 'Cross Punch', hookR: 'Hook Punch', hookL: 'left hook', upperL: 'left uppercut', upperR: 'right uppercut', ko: 'Knocked Out', getup: 'Getting Up' }
@@ -85,7 +87,8 @@ const P = {
   punchK: 1900, punchD: 110, punchFmax: 1350, leanMul: 0.35, hookMul: 1.7, // R2 — Punchers cross: extension ≈0.08s, arm locks out; hooks need more force to follow the arc
   easeLive: 0.6, easeRetract: 0.15, armLerp: 0.04,
   clipLed: { jab: true, leadhook: true, leadupper: true, upper: true }, armRelaxClip: 0.8, clipForce: 0.7, limbMode: 2, limbReact: 0.3, limbIeff: 1,   // these punches follow the Mixamo clip; force only guarantees contact                           // smoothness: target travels on an ease curve, arm stiffness blends
-  armRelax: 0.35, stunRelax: 0.25, hitImpulse: 4.5,                           // R3
+  armRelax: 0.35, stunRelax: 0.25, hitImpulse: 4.5 / C.DAMAGE_SCALE,   // knock-back per point of hp lost (hp loss is table damage × DAMAGE_SCALE)
+                            // R3
   lunge: 0.16, lungeJab: 0.12,                                             // hips step in during a punch (m) — Punchers cross ≈ 20–30cm (less here: the kinematic hips drag the torso)
   through: 0.26, throughClipHook: 0.3, clipDamp: 0, clipRate: 1.25, hookArc: 0.45,
   upperUnder: 0.28, upperThrough: 0.22, upperBack: 0.04, upperSplit: 0.45, upperYaw: 45, upperRange: 0.32, lungeUpperMin: 0.1, lungeUpperMax: 0.4, upperNear: 0.22, upperStepT: 0.6, upperMul: 1.3, upperUpright: 0.8, upperFollow: 0.3, upperReach: 0.38, upperRelax: 0.3,   // uppercut: under the chin by upperSplit of the drive, then straight up through it
@@ -108,11 +111,32 @@ for (const [k, v] of new URLSearchParams(location.search)) if (k in P && typeof 
 const fx = createFx(THREE, camera, P)
 const boxers = []
 
+// Boxing gloves on the hand bones (bone space is centimetres: wrist at y 0, knuckles at y ≈ 12, +y toward the fingers,
+// thumb on -x for the left hand / +x for the right). The finger bones are scaled to nothing so the open mocap hand
+// disappears inside the glove — no fist pose to get wrong.
+// Shape: a lathed mitten — narrow at the wrist, widest over the knuckles, rounded off at the front — flattened front-to-back,
+// the thumb a capsule lying ALONG the side (half sunk in), and a long cuff in a darker shade with a thin white trim.
+const GLOVE_PROFILE = [[4.4, -1], [5.6, 1.5], [7.1, 5], [8.2, 9], [8.4, 12.5], [7.6, 15.5], [5.4, 17.6], [2.4, 18.6], [0, 18.8]].map(([r, y]) => new THREE.Vector2(r, y))
+function addGloves(model, color) {
+  const mat = new THREE.MeshPhongMaterial({ color, shininess: 45 })
+  const cuffMat = new THREE.MeshPhongMaterial({ color: new THREE.Color(color).multiplyScalar(0.62), shininess: 25 }), trimMat = new THREE.MeshPhongMaterial({ color: 0xe9e6e0 })
+  for (const side of ['Left', 'Right']) {
+    const hand = model.getObjectByName(prefix + side + 'Hand'); if (!hand) continue
+    for (const f of hand.children) if (f.isBone) f.scale.setScalar(0.001)
+    const s = side === 'Left' ? -1 : 1
+    const body = new THREE.Mesh(new THREE.LatheGeometry(GLOVE_PROFILE, 24), mat); body.scale.set(1, 1, 0.84); body.position.z = 0.8
+    const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(2.9, 6.5, 6, 12), mat); thumb.position.set(s * 7.6, 8.2, 2.4); thumb.rotation.z = s * 0.22
+    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(5.0, 5.3, 8.5, 20), cuffMat); cuff.position.y = -4.2
+    const trim = new THREE.Mesh(new THREE.CylinderGeometry(5.25, 5.25, 1.1, 20), trimMat); trim.position.y = -0.4
+    hand.add(body, thumb, cuff, trim)
+  }
+}
 function buildBoxer(x, facing, tint) {
   const model = SkeletonUtils.clone(src)
   model.scale.setScalar(0.01); model.rotation.y = facing > 0 ? Math.PI / 2 : -Math.PI / 2
   model.position.x = x
-  model.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); if (tint) o.material.color = new THREE.Color(tint) } })
+  model.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); if (tint && !o.material.map) o.material.color = new THREE.Color(tint) } })   // tint only untextured bots — multiplying a textured character just turns it dark
+  addGloves(model, facing > 0 ? 0xb3202a : 0x1f4fa8)   // red corner / blue corner
   scene.add(model); model.updateMatrixWorld(true)
   const bone = n => model.getObjectByName(prefix + n)
   const wpos = b => b.getWorldPosition(new THREE.Vector3())
@@ -599,7 +623,7 @@ function onContact(h1, h2) {
     const body = target === 'head' ? t.boxer.b.head : t.boxer.b.torso
     body.applyImpulse({ x: g.boxer.facing * J, y: J * 0.15, z: 0 }, true)
     const knocked = t.boxer.sim.state === 'down'
-    fx.hit(r.dmg / (r.blocked ? C.GUARD_FACTOR : 1), r.blocked, knocked)
+    fx.hit(r.dmg / C.DAMAGE_SCALE / (r.blocked ? C.GUARD_FACTOR : 1), r.blocked, knocked)
     if (knocked) { slowT = P.koSlowT + 0.4; t.boxer.thudded = false }   // slow motion ONLY on a knockdown
     lastHit = `${g.boxer.idx === 0 ? 'A' : 'B'} ${s.punch}${s.punchHand} → ${target} ${r.dmg.toFixed(1)}${r.blocked ? ' (blocked)' : ''}${r.counter ? ' COUNTER' : ''}`
   }
@@ -640,36 +664,56 @@ addEventListener('keydown', e => {
   if (e.key === 'ArrowRight') queued = { punch: e.shiftKey ? 'upper' : keys[' '] ? 'hook' : 'cross', hand: 'R' }      // 6 / 4 / 2
 })
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false })
+const match = B ? makeMatch() : null   // rounds / rest / decision live in the sim; hits come from physics contacts (stepMatch gets hitTest = null)
+if (match) match.boxers = [A.sim, B.sim]
+let introT = 1.6                       // "ROUND 1" on the first bell
+function teleport(bx) {   // put the whole ragdoll where the sim now says the boxer stands (corner reset): shift every body, kill the velocities
+  const dx = bx.sim.x + bx.hipsLocal - bx.hips.translation().x, zero = { x: 0, y: 0, z: 0 }
+  for (const body of [bx.hips, ...bx.parts.map(p => p.body)]) {
+    const t = body.translation(); body.setTranslation({ x: t.x + dx, y: t.y, z: t.z }, true)
+    if (body !== bx.hips) { body.setLinvel(zero, true); body.setAngvel(zero, true) }
+  }
+  bx.down = false; bx.lungeX = 0; bx.prevHx = undefined; bx.prevVx = 0
+}
+function onPhase(from, to) {
+  if (to === 'rest' || to === 'fighting') { fx.bell(); for (const bx of boxers) teleport(bx) }
+  if (to === 'over') fx.bell(3)
+}
 function rematch() {   // fresh fight: everything the sim tracks, back in the corners
-  for (const bx of boxers) { Object.assign(bx.sim, makeSim(bx === A ? -0.9 : 0.9)); bx.down = false; bx.lungeX = 0; bx.prevHx = undefined }
+  for (const bx of boxers) Object.assign(bx.sim, makeSim(bx === A ? -1 : 1))
+  if (match) { Object.assign(match, makeMatch(), { boxers: [A.sim, B.sim] }); ai = makeAI(AI_LEVEL); introT = 1.6; fx.bell() }
+  for (const bx of boxers) teleport(bx)
   lastHit = ''; slowT = 0
 }
-let cpuTimer = 0
-function cpuInput(dt) {   // dummy: jab when in range every 1.6s
-  if (window.__forceB) { const f = window.__forceB; window.__forceB = null; return f }   // debug hook
-  if (A.sim.state === 'down') return { move: B.sim.x - A.sim.x < 1.7 ? 1 : 0, guard: false, lean: false, punch: null }   // opponent is down: back off to a neutral corner
-  cpuTimer += dt
-  const inRange = Math.abs(A.sim.x - B.sim.x) < 1.2
-  if (cpuTimer > 1.6 && inRange && B.sim.state === 'idle') {
-    cpuTimer = 0
-    // hand must match the punch: jab = lead (L), cross = rear (R), hooks either side
-    const picks = [['jab', 'L'], ['jab', 'L'], ['cross', 'R'], ['leadhook', 'L'], ['hook', 'R'], ['leadupper', 'L'], ['upper', 'R']]
-    const pick = picks[Math.floor(Math.random() * picks.length)]
-    return { move: 0, guard: false, lean: false, punch: pick[0], hand: pick[1] }
-  }
-  return { move: 0, guard: false, lean: false, punch: null }
+const AI_LEVEL = Math.max(1, Math.min(3, +(new URLSearchParams(location.search).get('ai') || 2)))   // ?ai=1 easy … 3 hard
+let ai = makeAI(AI_LEVEL)
+function cpuInput(dt) {
+  if (window.__forceB) { const f = window.__forceB; window.__forceB = null; return f }   // debug hook (harnesses keep B passive with it)
+  return stepAI(ai, B.sim, A.sim, dt)
 }
 
 // ---------- loop ----------
 let acc = 0
 const clock = new THREE.Clock()
+const $ = id => document.getElementById(id), hudEl = $('hud')
+if (hudEl) hudEl.hidden = !B
+function hud(m) {   // plain bars, no effects: hp, stamina, knockdowns, round clock
+  for (const [k, s] of [['a', A.sim], ['b', B.sim]]) {
+    $(k + 'hp').style.width = Math.max(0, s.hp) + '%'; $(k + 'st').style.width = Math.max(0, s.stamina) + '%'
+    $(k + 'kd').textContent = '●'.repeat(s.knockdowns) + '○'.repeat(Math.max(0, C.MAX_KNOCKDOWNS - s.knockdowns))
+  }
+  const t = Math.max(0, Math.ceil(m.clock))
+  $('round').textContent = m.phase === 'rest' ? 'REST' : `ROUND ${m.round} / ${C.ROUNDS}`
+  $('clock').textContent = m.phase === 'over' ? '—' : `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`
+}
 const draw = () => { fx.apply(); renderer.render(scene, camera); fx.restore() }
 function frame(dt) {
   if (fx.step(dt)) { draw(); return }   // hit-stop: the world holds still for a few frames, only the effects move
   if (slowT > 0) { slowT -= dt; dt *= slowT > 0.4 ? P.koSlow : 1 - (1 - P.koSlow) * Math.max(0, slowT) / 0.4 }   // knockdown slow-motion, eased back to real time
   const inA = { move: (keys.d ? 1 : 0) - (keys.a ? 1 : 0), guard: !!keys.s, lean: !!keys.w, punch: queued && queued.punch, hand: queued && queued.hand }
-  stepBoxer(A.sim, inA, dt); if (B) stepBoxer(B.sim, cpuInput(dt), dt); queued = null
-  if (B && B.sim.x - A.sim.x < C.MIN_GAP) { const c = (A.sim.x + B.sim.x) / 2; A.sim.x = c - C.MIN_GAP / 2; B.sim.x = c + C.MIN_GAP / 2 }
+  if (match) { const was = match.phase; stepMatch(match, inA, cpuInput(dt), dt, null); if (match.phase !== was) onPhase(was, match.phase) }
+  else stepBoxer(A.sim, inA, dt)
+  queued = null; introT -= dt
   for (const bx of boxers) {
     syncTarget(bx, dt)
     const down = bx.sim.state === 'down'
@@ -734,21 +778,27 @@ function frame(dt) {
   const dx = (mid - controls.target.x) * Math.min(1, dt * 3)
   controls.target.x += dx; camera.position.x += dx; controls.update()
   const st = s => `${s.state}${s.state === 'punch' ? ':' + punchPhase(s) : ''}`
-  ui.textContent = (B
+  const DEBUG = !B || new URLSearchParams(location.search).has('debug')
+  ui.className = DEBUG ? '' : 'hint'
+  ui.textContent = !DEBUG ? `A/D move · S guard · ← jab · → cross · Space+←/→ hooks · Shift+←/→ uppercuts · R rematch   (AI level ${AI_LEVEL}: ?ai=1–3)` : (B
     ? `M2 legs+hips mocap   A hp ${A.sim.hp.toFixed(0)} st ${A.sim.stamina.toFixed(0)} ${st(A.sim)}   |   B hp ${B.sim.hp.toFixed(0)} ${st(B.sim)}\n`
     : `SOLO — target ball   st ${A.sim.stamina.toFixed(0)} ${st(A.sim)}   thrown ${A.sim.stats.thrown}  hit ${ballHits}\n`) +
     `last hit: ${lastHit}\nA/D move  S guard  ← jab(1)  → cross(2)  Space+← lead hook(3)  Space+→ rear hook(4)  Shift+← lead uppercut(5)  Shift+→ rear uppercut(6)  R rematch` +
     (B ? `   (B punches back on its own)` : `   ↑/↓ ball height  [ ] ball distance (${(ballHome.x - A.sim.x).toFixed(2)} m)`)
   const dn = boxers.find(b => b.sim.state === 'down')
-  if (!dn) big.textContent = ''
-  else {   // referee's count in sim time: up at 8, out at 10
-    const t = dn.sim.stateTime, out = dn.sim.knockdowns >= C.MAX_KNOCKDOWNS, n = Math.floor(t / (C.COUNT_SECONDS / 8)) + 1
-    big.textContent = t < 1 ? '' : out && n > 10 ? `K.O.\n${dn === A ? 'B' : 'A'} wins — R: rematch` : String(Math.min(n, out ? 10 : 8))
-  }
+  if (dn && dn.sim.stateTime >= 1) {   // referee's count in sim time: up at 8, out at 10
+    const out = dn.sim.knockdowns >= C.MAX_KNOCKDOWNS, n = Math.floor(dn.sim.stateTime / (C.COUNT_SECONDS / 8)) + 1
+    big.textContent = out && n > 10 ? `K.O.\n${dn === A ? 'CPU' : 'YOU'} WIN${dn === A ? 'S' : ''} — R: rematch` : String(Math.min(n, out ? 10 : 8))
+  } else if (match && match.phase === 'over' && !match.byKO) {
+    const [a, b] = [A.sim.stats.dealt, B.sim.stats.dealt].map(Math.round)
+    big.textContent = `${match.winner === 0 ? 'YOU WIN' : match.winner === 1 ? 'CPU WINS' : 'DRAW'}\ndecision ${a} – ${b} — R: rematch`
+  } else if (match && match.phase === 'rest') big.textContent = `ROUND ${match.round + 1}`
+  else big.textContent = match && introT > 0 ? `ROUND ${match.round}` : ''
+  if (match) hud(match)
   draw()
 }
 window.__frame = frame
-window.__rag = { world, A, B, P, M, camera, controls, RAPIER, punchPhase, get ball() { return ball }, get ballHits() { return ballHits }, ballHome, clips, fx }
+window.__rag = { world, A, B, P, M, camera, controls, RAPIER, punchPhase, get ball() { return ball }, get ballHits() { return ballHits }, ballHome, clips, fx, match }
 window.__loadClip = async f => {   // debug: load+retarget any fbx clip for scrubbing
   const c = (await loader.loadAsync('models/' + f + '.fbx')).animations[0]
   c.tracks.forEach(t => { t.name = t.name.replace(/^mixamorig\d*/, prefix) })

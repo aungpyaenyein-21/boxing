@@ -14,6 +14,7 @@ export function run(name = 'hook', n = 6, verbose = false) {
   if (B.sim.x - A.sim.x > 0.65) { kd('d'); for (let i = 0; i < 150; i++) step(); ku('d') }
   const out = []
   for (let k = 0; k < n; k++) {
+        if (R.match) Object.assign(R.match, { clock: 90, phase: 'fighting' })   // the bell must not ring mid-measurement
     A.sim.stamina = 100; A.sim.hp = 100; B.sim.hp = 100; for (let i = 0; i < 100; i++) step()
     const hp0 = B.sim.hp; let best = 9, at = null; const rows = []
     if (mod === 1) kd(' '); kd(arrow, mod === 2)

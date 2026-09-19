@@ -1,13 +1,15 @@
 // knock a boxer down and trace the fall / count / get-up.   (await import('/dev/knockdown.js')).run('B' | 'A', { stopAt })
 //   stopAt (sim seconds since the knockdown) leaves the world paused there for a screenshot
 import * as THREE from 'three'
+import { C } from '/sim/constants.js?v=2'
 export function run(who = 'B', { stopAt = null, final = false } = {}) {
   const R = window.__rag, A = R.A, B = R.B, dt = 1 / 60, V = who === 'B' ? B : A, H = who === 'B' ? A : B
   const kd = k => window.dispatchEvent(new KeyboardEvent('keydown', { key: k, code: k })), ku = k => window.dispatchEvent(new KeyboardEvent('keyup', { key: k, code: k }))
   const step = () => { window.__forceB = who === 'B' ? { move: 0, guard: false, lean: false, punch: null } : window.__nextB || { move: 0, guard: false, lean: false, punch: null }; window.__nextB = null; window.__frame(dt) }
   for (const bx of [A, B]) Object.assign(bx.sim, { hp: 100, stamina: 100, state: 'idle', knockdowns: 0, punch: null }); A.down = B.down = false
   A.sim.x = -0.35; B.sim.x = 0.35; for (let i = 0; i < 150; i++) step()
-  V.sim.hp = 4; if (final) V.sim.knockdowns = 1
+  if (R.match) Object.assign(R.match, { clock: 90, phase: 'fighting', round: 1, winner: null, byKO: false })
+  V.sim.hp = 2; if (final) V.sim.knockdowns = C.MAX_KNOCKDOWNS - 1
   if (who === 'B') kd('ArrowRight'); else window.__nextB = { move: 0, guard: false, lean: false, punch: 'cross', hand: 'R' }
   const rows = []; let nan = false, up = null, minHeadY = 9, maxPartV = 0
   for (let i = 0; i < 60 * 14; i++) {

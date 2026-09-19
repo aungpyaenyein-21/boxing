@@ -2,6 +2,7 @@
 import assert from 'node:assert'
 import { PUNCH, C } from './constants.js'
 import { makeBoxer, makeMatch, stepMatch, stepBoxer, tryPunch, punchPhase, resolveHit } from './combat.js'
+import { makeAI, stepAI } from './ai.js'
 
 const dt = 1 / 60
 const idle = { move: 0, guard: false, lean: false, punch: null }
@@ -42,7 +43,7 @@ const idle = { move: 0, guard: false, lean: false, punch: null }
   const att = makeBoxer(0), def = makeBoxer(1)
   tryPunch(att, 'jab'); att.stateTime = 0.08
   const r = resolveHit(att, def)
-  const expected = PUNCH.jab.dmgHead * (0.75 + 94 / 400)
+  const expected = C.DAMAGE_SCALE * PUNCH.jab.dmgHead * (0.75 + 94 / 400)
   assert(Math.abs(r.dmg - expected) < 1e-9, `dmg ${r.dmg} != ${expected}`)
   assert.equal(def.state, 'hit')
   assert.equal(att.stats.landed, 1)
@@ -61,7 +62,7 @@ const idle = { move: 0, guard: false, lean: false, punch: null }
   assert.equal(def.stamina, 93)
   assert.equal(def.stats.blocked, 1)
   assert.equal(att.stats.landed, 0)
-  assert(r.dmg < PUNCH.jab.dmgHead * 0.18 * 1.01)
+  assert(r.dmg < C.DAMAGE_SCALE * PUNCH.jab.dmgHead * 0.18 * 1.01)
 }
 
 // --- lean dodges head punches entirely
@@ -82,7 +83,7 @@ const idle = { move: 0, guard: false, lean: false, punch: null }
   tryPunch(att, 'jab'); att.stateTime = 0.08
   const r = resolveHit(att, def)
   assert(r.counter)
-  assert(Math.abs(r.dmg - PUNCH.jab.dmgHead * (0.75 + 94 / 400) * 1.5) < 1e-9)
+  assert(Math.abs(r.dmg - C.DAMAGE_SCALE * PUNCH.jab.dmgHead * (0.75 + 94 / 400) * 1.5) < 1e-9)
 }
 
 // --- momentum: stepping forward adds damage
@@ -91,7 +92,7 @@ const idle = { move: 0, guard: false, lean: false, punch: null }
   att.vx = C.MOVE_SPEED
   tryPunch(att, 'jab'); att.stateTime = 0.08
   const r = resolveHit(att, def)
-  assert(Math.abs(r.dmg - PUNCH.jab.dmgHead * (0.75 + 94 / 400) * (1 + C.MOVE_SPEED * C.MOMENTUM_K)) < 1e-9)
+  assert(Math.abs(r.dmg - C.DAMAGE_SCALE * PUNCH.jab.dmgHead * (0.75 + 94 / 400) * (1 + C.MOVE_SPEED * C.MOMENTUM_K)) < 1e-9)
 }
 
 // --- body hits use body damage even through lean
@@ -101,7 +102,7 @@ const idle = { move: 0, guard: false, lean: false, punch: null }
   tryPunch(att, 'hook'); att.stateTime = 0.20
   const r = resolveHit(att, def, 'body')
   assert(!r.missed)
-  assert(Math.abs(r.dmg - PUNCH.hook.dmgBody * (0.75 + 85 / 400)) < 1e-9)
+  assert(Math.abs(r.dmg - C.DAMAGE_SCALE * PUNCH.hook.dmgBody * (0.75 + 85 / 400)) < 1e-9)
 }
 
 // --- uppercuts are ordinary table punches: thrown with either hand, land for their table damage
@@ -112,7 +113,7 @@ const idle = { move: 0, guard: false, lean: false, punch: null }
     assert.equal(att.punch, type); assert.equal(att.punchHand, hand)
     att.stateTime = PUNCH[type].windup + 0.01
     const r = resolveHit(att, def, 'head')
-    assert(!r.missed && Math.abs(r.dmg - PUNCH[type].dmgHead * (0.75 + att.stamina / 400)) < 1e-9, `${type} dmg ${r.dmg}`)
+    assert(!r.missed && Math.abs(r.dmg - C.DAMAGE_SCALE * PUNCH[type].dmgHead * (0.75 + att.stamina / 400)) < 1e-9, `${type} dmg ${r.dmg}`)
   }
 }
 
@@ -134,7 +135,7 @@ const idle = { move: 0, guard: false, lean: false, punch: null }
 {
   const m = makeMatch()
   const [a, b] = m.boxers
-  b.knockdowns = 1
+  b.knockdowns = C.MAX_KNOCKDOWNS - 1
   b.hp = 1
   const spam = { ...idle, move: 1, punch: 'jab' }
   let guard = 0
@@ -163,6 +164,33 @@ const idle = { move: 0, guard: false, lean: false, punch: null }
     '| rounds:', m.round,
     '| A dealt', m.boxers[0].stats.dealt.toFixed(1),
     'B dealt', m.boxers[1].stats.dealt.toFixed(1))
+}
+
+// --- opponent AI: it must actually box (block, counter, combine, breathe) and "harder" must be harder
+{
+  const lcg = seed => () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296   // replayable matches
+  const fight = (lvA, lvB, seed) => {
+    const m = makeMatch(), [a, b] = m.boxers, aiA = makeAI(lvA, lcg(seed)), aiB = makeAI(lvB, lcg(seed + 7))
+    let steps = 0, lowStamina = 0
+    const types = new Set()
+    while (m.phase !== 'over' && steps++ < 400000) {
+      const inA = stepAI(aiA, a, b, dt), inB = stepAI(aiB, b, a, dt)
+      if (inB.punch) types.add(inB.punch)
+      stepMatch(m, inA, inB, dt)
+      if (m.phase === 'fighting' && b.stamina < 5) lowStamina++
+    }
+    assert.equal(m.phase, 'over', 'AI match must finish')
+    return { m, a, b, types, lowStamina, steps }
+  }
+  const r = fight(2, 2, 1)
+  assert(r.b.stats.blocked > 0, 'AI never blocked')
+  assert(r.types.size >= 4, `AI only threw ${[...r.types]}`)
+  assert(r.lowStamina / r.steps < 0.05, 'AI punches itself empty')
+  assert(r.b.stats.thrown > 30 && r.b.stats.landed > 5, `AI too passive: ${r.b.stats.thrown} thrown / ${r.b.stats.landed} landed`)
+  let wins3 = 0, wins1 = 0
+  for (let s = 1; s <= 30; s++) { const w = fight(3, 1, s * 13).m.winner; if (w === 0) wins3++; else if (w === 1) wins1++ }
+  assert(wins3 > wins1 * 2, `level 3 should dominate level 1: ${wins3} vs ${wins1}`)
+  console.log(`  AI: L2 vs L2 → ${r.m.byKO ? 'KO' : 'decision'} in round ${r.m.round}, B threw ${r.b.stats.thrown} (${[...r.types].join(' ')}), blocked ${r.b.stats.blocked}; L3 beat L1 ${wins3}–${wins1} of 30`)
 }
 
 console.log('all sim tests passed')

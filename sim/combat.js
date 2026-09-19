@@ -44,7 +44,7 @@ export function resolveHit(att, def, target = 'head') {
   if (target === 'head' && def.lean > 0.5) return { missed: true }
   const p = PUNCH[att.punch]
   let dmg = target === 'head' ? p.dmgHead : p.dmgBody
-  dmg *= 0.75 + att.stamina / 400
+  dmg *= C.DAMAGE_SCALE * (0.75 + att.stamina / 400)
   const fwd = att.vx * Math.sign(def.x - att.x)
   if (fwd > 0) dmg *= 1 + fwd * C.MOMENTUM_K
   const counter = def.state === 'punch' && punchPhase(def) === 'recovery'
@@ -113,9 +113,11 @@ function rangeHit(att, def) {
   return Math.abs(att.x - def.x) <= PUNCH[att.punch].reach ? 'head' : null
 }
 
+const NO_INPUT = { move: 0, guard: false, lean: false, punch: null }
+// hitTest: (att, def) → 'head' | 'body' | null. Pass null when the view resolves hits itself (physics contacts call resolveHit).
 export function stepMatch(m, inputA, inputB, dt, hitTest = rangeHit) {
-  if (m.phase === 'over') return
   const [a, b] = m.boxers
+  if (m.phase === 'over') { stepBoxer(a, NO_INPUT, dt); stepBoxer(b, NO_INPUT, dt); return }   // no more scoring, but time still passes: the view has a fall and a count to finish
   m.clock -= dt
   if (m.phase === 'rest') {
     if (m.clock <= 0) { m.round++; m.phase = 'fighting'; m.clock = C.ROUND_SECONDS }
@@ -132,7 +134,7 @@ export function stepMatch(m, inputA, inputB, dt, hitTest = rangeHit) {
   for (const [att, def] of [[a, b], [b, a]]) {
     // contact can land through recovery too — measured glove peaks arrive after the
     // table's live window; hitApplied still caps it at one hit per punch
-    if (att.state === 'punch' && !att.hitApplied && punchPhase(att) !== 'windup' &&
+    if (hitTest && att.state === 'punch' && !att.hitApplied && punchPhase(att) !== 'windup' &&
         def.state !== 'down') {
       const target = hitTest(att, def)
       if (target) resolveHit(att, def, target)

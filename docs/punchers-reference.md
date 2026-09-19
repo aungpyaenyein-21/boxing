@@ -228,3 +228,15 @@ Sim (unchanged logic): hp ≤ 0 → `down`; first knockdown rises after `COUNT_S
 - **Slow-motion only on a knockdown**: ×0.25 for 0.9 real seconds, eased back over 0.4 s; the knockout punch gets a 180 ms hit-stop, a bigger jolt and a deeper sound; the body landing gets a floor thud.
 - Count overlay in sim time (up at 8, out at 10 → "K.O."), **R** = rematch. The CPU backs off to a neutral corner while the player is down; nobody can hit or be hit while down; punches at a downed opponent aim where his head would be if he stood.
 - Harness: `dev/knockdown.js` (`run('A'|'B', { stopAt, final })`).
+
+---
+
+# R5 — match, HUD, opponent AI, gloves (2026-09-19)
+
+- **Match** lives in the sim (`makeMatch` / `stepMatch`): 3 × 90 s rounds, 3 s rest (+24 hp, full stamina, back to the corners), decision on damage dealt, three-knockdown rule. The ragdoll layer calls `stepMatch(…, hitTest = null)` — hits still come from physics contacts — and teleports the whole ragdoll on a corner reset. After the final bell the sim keeps time passing so the fall and the count can finish.
+- **Damage balance**: `DAMAGE_SCALE` 0.5 (hp lost = table damage × 0.5). At 1.0 a fight was over in ≈11 clean hits / 20 s; now a bot-vs-AI match runs the full three rounds. `hitImpulse` and the fx power are divided by the scale, so the physical reaction is unchanged.
+- **AI** (`sim/ai.js`, pure, rng injected): reads each punch once → guards after a reaction delay (shorter for the follow-ups of a real combination, < 0.75 s apart), counters into the recovery (×1.5), throws combinations from a table (uppercut combos only when close), steps in to 0.82 m and out again, backs off to breathe below 28 stamina, goes to a neutral corner on a knockdown. Levels `?ai=1|2|3` (react 0.34 / 0.24 / 0.16 s, block 30 / 55 / 78 %). Test: L3 beats L1 30–0 over 30 seeded matches; L2 throws all six punches. A spamming bot gets shut down (its tired punches are slow enough to block) — stamina management is the way in.
+- **HUD**: plain HTML bars — hp, stamina, knockdown dots, round and clock; what is left of a bar hugs the clock. Debug text only with `?debug` (or in solo).
+- **Gloves**: a lathed mitten on each hand bone (narrow wrist → widest over the knuckles → rounded front, flattened front-to-back), thumb = a capsule lying along the side (−x left hand / +x right), long cuff in a darker shade with a thin white trim; red corner / blue corner. Finger bones are scaled to nothing so the open mocap hand disappears inside — no fist pose to get wrong. (First try — a sphere with a bump and a white cylinder — read as a balloon on a stick, thumb on the wrong side.)
+- **Character**: `?char=<file in models/>` (e.g. `Ch45_nonPBR`). Works mechanically — same hit timing — but Ch45 is a dark-clothed character and reads as a silhouette under the current lights; Y Bot stays the default. Textured characters are not tinted.
+- Harness: `dev/bot_match.js` (scripted player vs the AI through a whole match, fast-forward).

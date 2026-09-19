@@ -15,6 +15,7 @@ export function run(gaps = [0.6, 0.7, 0.8, 0.9], n = 3, names = Object.keys(KEYS
     for (const name of names) {
       const [arrow, mod] = KEYS[name]; const res = []
       for (let k = 0; k < n; k++) {
+        if (R.match) Object.assign(R.match, { clock: 90, phase: 'fighting' })   // the bell must not ring mid-measurement
         A.sim.stamina = 100; A.sim.hp = 100; B.sim.hp = 100; A.sim.x = -gap / 2; B.sim.x = gap / 2
         for (let i = 0; i < 90; i++) step()
         const hp0 = B.sim.hp; let when = null

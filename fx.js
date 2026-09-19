@@ -62,6 +62,16 @@ export function createFx(THREE, camera, P) {
     og.gain.setValueAtTime(1.1, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.3); o.connect(og).connect(master); o.start(t); o.stop(t + 0.32)
   }
 
+  function bell(times = 1) {   // ring bell: two slightly detuned partials with a long decay
+    if (!actx || !P.fxVol) return
+    master.gain.value = P.fxVol
+    for (let i = 0; i < times; i++) for (const [fq, gain] of [[830, 0.22], [1245, 0.13], [1660, 0.07]]) {
+      const t = actx.currentTime + i * 0.28, o = actx.createOscillator(), g = actx.createGain()
+      o.type = 'sine'; o.frequency.value = fq; g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0005, t + 1.1)
+      o.connect(g).connect(master); o.start(t); o.stop(t + 1.15)
+    }
+  }
+
   // advance the shake; returns true while the hit-stop holds the world (caller skips its simulation step, still draws)
   function step(dt) {
     shakeT += dt; shakeAmp *= Math.exp(-dt / 0.07)
@@ -76,5 +86,5 @@ export function createFx(THREE, camera, P) {
   }
   function restore() { camera.position.sub(offset) }   // …and right after, so controls / follow-cam never see the jolt
 
-  return { unlock, hit, thud, whoosh, step, apply, restore, get frozen() { return stop > 0 }, get audio() { return actx ? actx.state : 'locked' } }
+  return { unlock, hit, thud, bell, whoosh, step, apply, restore, get frozen() { return stop > 0 }, get audio() { return actx ? actx.state : 'locked' } }
 }
