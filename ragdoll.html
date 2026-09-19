@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Ragdoll spike R3</title>
+<style>
+  body { margin:0; background:#f2f2f5; color:#222; font:13px/1.6 monospace; overflow:hidden }
+  #ui { position:fixed; top:10px; left:10px; z-index:2; white-space:pre }
+  #ui button { margin:2px 4px 2px 0; padding:5px 10px; font:inherit; cursor:pointer;
+               background:#fff; color:#222; border:1px solid #bbb; border-radius:4px }
+</style>
+</head>
+<body>
+<div id="ui">loading...</div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+  "fflate": "https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js",
+  "rapier": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.14.0/+esm"
+}}
+</script>
+<script type="module" src="./ragdoll.js?v=34"></script>
+</body>
+</html>

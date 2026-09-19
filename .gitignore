@@ -1,0 +1,8 @@
+# reference recordings (Punchers captures, bug videos) — ~2 GB, kept on disk only
+records/
+*.mov
+# Mixamo character meshes used only by the Phase-0 spike.html (168 MB); the game runs on models/Y Bot.fbx
+models/Ch24_nonPBR.fbx
+models/Ch44_nonPBR.fbx
+models/Ch45_nonPBR.fbx
+.DS_Store

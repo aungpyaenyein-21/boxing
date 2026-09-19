@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Boxing v0 spike</title>
+<style>
+  body { margin:0; background:#111; color:#eee; font:13px/1.6 monospace; overflow:hidden }
+  #ui { position:fixed; top:10px; left:10px; z-index:2 }
+  #ui button { margin:2px; padding:6px 12px; font:inherit; cursor:pointer;
+               background:#222; color:#eee; border:1px solid #555; border-radius:4px }
+  #ui button.on { background:#a33; border-color:#c55 }
+  #readout { position:fixed; bottom:10px; left:10px; white-space:pre; z-index:2;
+             text-shadow:0 1px 2px #000 }
+</style>
+</head>
+<body>
+<div id="ui">
+  <div id="chars">
+    <button data-ch="Ch24_nonPBR">Ch24</button>
+    <button data-ch="Ch44_nonPBR">Ch44</button>
+    <button data-ch="Ch45_nonPBR">Ch45</button>
+  </div>
+  <div><button id="jab">Jab (J)</button></div>
+</div>
+<div id="readout">loading three.js...</div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+  "fflate": "https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three'
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js'
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+const readout = document.getElementById('readout')
+
+const renderer = new THREE.WebGLRenderer({ antialias: true })
+renderer.setSize(innerWidth, innerHeight)
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+document.body.appendChild(renderer.domElement)
+
+const scene = new THREE.Scene()
+scene.background = new THREE.Color(0x1a1a22)
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100)
+camera.position.set(0, 1.5, 3.2)
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight
+  camera.updateProjectionMatrix()
+  renderer.setSize(innerWidth, innerHeight)
+})
+
+// ponytail: OrbitControls is spike-only for inspecting models; game camera removes it (doc §9)
+const controls = new OrbitControls(camera, renderer.domElement)
+controls.target.set(0, 1, 0)
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x334, 1.2))
+const dir = new THREE.DirectionalLight(0xffffff, 1.5)
+dir.position.set(2, 4, 3)
+scene.add(dir)
+scene.add(new THREE.GridHelper(10, 20, 0x445, 0x334))
+
+const loader = new FBXLoader()
+const clips = {}
+let model = null, mixer = null, actions = {}, state = 'idle'
+let handL = null, handR = null
+
+async function loadClip(file) {
+  const g = await loader.loadAsync('models/' + file + '.fbx')
+  return g.animations[0]
+}
+
+async function loadCharacter(name) {
+  readout.textContent = 'loading ' + name + '...'
+  const g = await loader.loadAsync('models/' + name + '.fbx')
+  if (model) scene.remove(model)
+  model = g
+  model.scale.setScalar(0.01)  // Mixamo: 1 unit = 1cm
+  model.rotation.y = Math.PI   // face the camera
+  scene.add(model)
+  handL = handR = null
+  let prefix = 'mixamorig'
+  model.traverse(o => {
+    const m = o.name.match(/^(mixamorig\d*)Hips$/)
+    if (m) prefix = m[1]
+    if (/^mixamorig\d*LeftHand$/.test(o.name)) handL = o
+    if (/^mixamorig\d*RightHand$/.test(o.name)) handR = o
+  })
+  mixer = new THREE.AnimationMixer(model)
+  // Mixamo rigs differ only in namespace digit (mixamorig / mixamorig1 / ...) — rename tracks to match
+  const retarget = clip => {
+    const c = clip.clone()
+    c.tracks.forEach(t => { t.name = t.name.replace(/^mixamorig\d*/, prefix) })
+    return c
+  }
+  actions.idle = mixer.clipAction(retarget(clips.idle))
+  actions.jab = mixer.clipAction(retarget(clips.jab))
+  actions.jab.setLoop(THREE.LoopOnce)
+  mixer.addEventListener('finished', e => {
+    if (e.action === actions.jab) {
+      state = 'idle'
+      actions.jab.fadeOut(0.15)
+      actions.idle.reset().fadeIn(0.15).play()
+      // v0 DoD: the hand must actually travel during the punch
+      console.log('JAB CHECK: max hand travel', punchMax.toFixed(2), 'm', punchMax > 0.3 ? 'OK' : 'NG')
+    }
+  })
+  actions.idle.play()
+  state = 'idle'
+  document.querySelectorAll('#chars button').forEach(b =>
+    b.classList.toggle('on', b.dataset.ch === name))
+  console.log('loaded', name, '| prefix:', prefix, '| hands:', handL?.name, handR?.name)
+}
+
+const punchStart = new THREE.Vector3()
+let punchMax = 0
+function jab() {
+  if (!mixer || state === 'punch') return
+  state = 'punch'
+  if (handL) { handL.getWorldPosition(punchStart); punchMax = 0 }
+  actions.idle.fadeOut(0.08)
+  actions.jab.reset().fadeIn(0.08).play()
+}
+
+document.querySelectorAll('#chars button').forEach(b =>
+  b.onclick = () => loadCharacter(b.dataset.ch))
+document.getElementById('jab').onclick = jab
+addEventListener('keydown', e => { if (e.key === 'j') jab() })
+
+const v = new THREE.Vector3()  // reused, never allocate in the loop (doc §10)
+const clock = new THREE.Clock()
+function tick() {
+  requestAnimationFrame(tick)
+  if (mixer) mixer.update(clock.getDelta())
+  controls.update()
+  let line = 'state: ' + state
+  if (handL) {
+    handL.getWorldPosition(v)
+    line += `\nL hand  x:${v.x.toFixed(2)}  y:${v.y.toFixed(2)}  z:${v.z.toFixed(2)}`
+    if (state === 'punch') {
+      punchMax = Math.max(punchMax, v.distanceTo(punchStart))
+      console.log('L', +v.x.toFixed(3), +v.y.toFixed(3), +v.z.toFixed(3))
+    }
+  }
+  if (handR) {
+    handR.getWorldPosition(v)
+    line += `\nR hand  x:${v.x.toFixed(2)}  y:${v.y.toFixed(2)}  z:${v.z.toFixed(2)}`
+  }
+  readout.textContent = line
+  renderer.render(scene, camera)
+}
+tick()
+
+clips.idle = await loadClip('Idle')
+clips.jab = await loadClip('Lead Jab')
+console.log('clip durations  idle:', clips.idle.duration.toFixed(2) + 's', ' jab:', clips.jab.duration.toFixed(2) + 's')
+await loadCharacter('Ch45_nonPBR')
+</script>
+</body>
+</html>
