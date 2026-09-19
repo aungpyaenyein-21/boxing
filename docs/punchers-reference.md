@@ -240,3 +240,18 @@ Sim (unchanged logic): hp ≤ 0 → `down`; first knockdown rises after `COUNT_S
 - **Gloves**: a lathed mitten on each hand bone (narrow wrist → widest over the knuckles → rounded front, flattened front-to-back), thumb = a capsule lying along the side (−x left hand / +x right), long cuff in a darker shade with a thin white trim; red corner / blue corner. Finger bones are scaled to nothing so the open mocap hand disappears inside — no fist pose to get wrong. (First try — a sphere with a bump and a white cylinder — read as a balloon on a stick, thumb on the wrong side.)
 - **Character**: `?char=<file in models/>` (e.g. `Ch45_nonPBR`). Works mechanically — same hit timing — but Ch45 is a dark-clothed character and reads as a silhouette under the current lights; Y Bot stays the default. Textured characters are not tinted.
 - Harness: `dev/bot_match.js` (scripted player vs the AI through a whole match, fast-forward).
+
+---
+
+# Physical guard — 2026-09-19
+
+User: "holding the guard means you can never be hit — but when the guarding hands have been moved, the punch should land, like real boxing."
+- **What the glove meets decides** (`resolveHit(att, def, target, block)`): it dies on the opponent's glove / forearm → `full` block (×0.18 chip, defender pays 7 stamina); it touched the guard and still reached the head / body within `guardWindow` 0.1 s → `partial` (×0.5, half the stamina cost, still staggers); it reached the head untouched → a clean hit **even with the guard up**. Headless default (no physics): straights `full`, hooks / uppercuts `partial`.
+- **A firm guard soaks the punch up**: on guard contact the punching forearm loses `guardBrake × strength` of its velocity, the glove drive drops to `1 − guardStop × strength`, and the punching arm's motors go slack by the same factor (clip-led punches push with their motors).
+- **The guard can be shaken open**: every punch it takes adds `guardShockGain × power/16` of shock (decays over `guardShockT` 0.35 s, costs up to `guardShockMax` 80 % of the hold); tired arms hold less (`guardTired` 45 % at 0 stamina). `strength` scales both the guard springs and the braking.
+- **Guard pose**: gloves side by side at cheek / chin level, 13 cm in front of the face, nearly touching (`guardFwd / guardY / guardWide`) — that is where punches arrive; arm motors relaxed to 0.3 while guarding so the springs place the gloves and the elbows hang in. (The old eye-level pose let straights in underneath; Mixamo's *Center Block* pose left the chin open — cross blocked 0 %.)
+- Measured on a fresh guard (n = 16): jab blocked 81 %, cross 100 %, rear uppercut 88 %, lead hook 0 % blocked / 63 % halved, rear hook 75 % clean. cross-cross-cross: 1st blocked 6/6, 2nd and 3rd get through 6/6 and 5/6. Guard at 15 stamina: nothing fully blocked. A punch that gets through staggers the defender, so the follow-ups land clean.
+- AI: finishes with a hook / uppercut when the opponent's guard is up. Harness: `dev/guard_test.js` (`singles()`, `combo([...])`), `R.hitLog`.
+
+# Gloves v3 — after the user's reference picture
+Fat padded pillow (lathe: near-straight sides, broad domed top), flattened front-to-back; a big thumb lobe (scaled sphere) bulging from the side, leaning in at its tip; wide wrist strap in the same red a shade darker with a darker band; no white trim.

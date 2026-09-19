@@ -93,8 +93,12 @@ const P = {
   through: 0.26, throughClipHook: 0.3, clipDamp: 0, clipRate: 1.25, hookArc: 0.45,
   upperUnder: 0.28, upperThrough: 0.22, upperBack: 0.04, upperSplit: 0.45, upperYaw: 45, upperRange: 0.32, lungeUpperMin: 0.1, lungeUpperMax: 0.4, upperNear: 0.22, upperStepT: 0.6, upperMul: 1.3, upperUpright: 0.8, upperFollow: 0.3, upperReach: 0.38, upperRelax: 0.3,   // uppercut: under the chin by upperSplit of the drive, then straight up through it
   koRelax: 0.05, koSlow: 0.25, koSlowT: 0.9, koGetupT: 2.8, koFallT: 1.1, koBack: 0.55, koSpine: 0.35,   // knockdown: motor strength while down, slow-motion scale + real seconds, get-up duration (s), fall duration (s) and how far back he goes (m)
+  // physical guard: a block is what the glove really met. guardStop = how much of the punch drive dies on a fresh guard,
+  // guardShock* = how much each blocked punch loosens the guard (×power/16) and for how long, guardTired = guard strength at 0 stamina,
+  // guardWindow = seconds the glove has to get past the guard to the head before the punch counts as fully blocked
+  guardStop: 0.95, guardBrake: 0.92, guardShockGain: 0.9, guardShockMax: 0.8, guardShockT: 0.35, guardTired: 0.45, guardWindow: 0.1, guardFwd: 0.13, guardY: -0.07, guardWide: 0.075, guardArmRelax: 0.3,
   fxStop: 1, fxShake: 1, fxVol: 0.5,   // impact pack (fx.js): hit-stop / camera shake / sound — 0 turns one off
-  kY: 2.5, dY: 40, aimSide: 0, aimLead: 1.5, holdDist: 0.1, easeCross: 0.9, hookLead: 45, hookPast: 50, hookHold: 60, hookD: 30, hookGate: 0.65, hookRmin: 0.32, hookRmax: 0.5,                 // straight-punch aim offset to the glove's own side; brake only within holdDist of the target; rear-hook sweep ease + max arc radius                                             // punch-through depth (straightens the elbow), hook side offset
+  kY: 2.5, dY: 40, aimClip: 0.06, aimSide: 0, aimLead: 1.5, holdDist: 0.1, easeCross: 0.9, hookLead: 45, hookPast: 50, hookHold: 60, hookD: 30, hookGate: 0.65, hookRmin: 0.32, hookRmax: 0.5,                 // straight-punch aim offset to the glove's own side; brake only within holdDist of the target; rear-hook sweep ease + max arc radius                                             // punch-through depth (straightens the elbow), hook side offset
   hookWind: 0.35, hookFollow: 0.5, hookYaw: 50,                            // hook: glove pulled back+out on windup, swings past the target, torso rotates more
   hookR: 0.46, hookRrear: 0.58, hookElbow: 0.8, hookSweep: [-20, 120],     // hook = glove on an arc around the shoulder; lead hook tight (elbow ~90°), rear hook wider (arm nearly straight, Punchers)
   hipsRot: 1, followLegs: 1,                                               // M2 debug toggles
@@ -103,7 +107,7 @@ const P = {
   idleSpeed: 0.84, bobGain: 1.3, crouch: 0.05, guardK: 450, guardD: 18,
   // high guard (S), from Punchers records/guard.mov: gloves pressed together in front of the face,
   // elbows in, head tucked, slight crouch, reached in ~0.15s
-  blockK: 700, blockD: 22, blockCrouch: 0.03,
+  blockK: 1100, blockD: 40, blockCrouch: 0.03,
   retractK: 650, retractD: 40,   // punch recovery: glove snaps back to the chin (Punchers jab retract ≈0.1s)
   unwindRelax: 1, unwindExtra: 0.3, unwindRate: 5, maxLean: 18, unwindDamp: 2.5,   // after a punch: spine STIFFER so the torso rides the hips back instead of lagging (a lagging torso reads as a shove), slow hips return
 }
@@ -114,21 +118,22 @@ const boxers = []
 // Boxing gloves on the hand bones (bone space is centimetres: wrist at y 0, knuckles at y ≈ 12, +y toward the fingers,
 // thumb on -x for the left hand / +x for the right). The finger bones are scaled to nothing so the open mocap hand
 // disappears inside the glove — no fist pose to get wrong.
-// Shape: a lathed mitten — narrow at the wrist, widest over the knuckles, rounded off at the front — flattened front-to-back,
-// the thumb a capsule lying ALONG the side (half sunk in), and a long cuff in a darker shade with a thin white trim.
-const GLOVE_PROFILE = [[4.4, -1], [5.6, 1.5], [7.1, 5], [8.2, 9], [8.4, 12.5], [7.6, 15.5], [5.4, 17.6], [2.4, 18.6], [0, 18.8]].map(([r, y]) => new THREE.Vector2(r, y))
+// Shape after the user's reference picture: a fat padded pillow — sides almost straight, a broad DOMED top (not a point),
+// flattened front-to-back — a big thumb lobe bulging from the side (cuff top → two-thirds up, leaning in at its tip),
+// and a wide wrist strap in the same red, a shade darker, with a darker band round it. No white trim.
+const GLOVE_PROFILE = [[6.3, 0.2], [7.6, 2], [8.6, 5], [9.1, 9], [9.1, 13], [8.4, 16], [6.6, 18.2], [3.6, 19.5], [0, 19.9]].map(([r, y]) => new THREE.Vector2(r, y))
 function addGloves(model, color) {
-  const mat = new THREE.MeshPhongMaterial({ color, shininess: 45 })
-  const cuffMat = new THREE.MeshPhongMaterial({ color: new THREE.Color(color).multiplyScalar(0.62), shininess: 25 }), trimMat = new THREE.MeshPhongMaterial({ color: 0xe9e6e0 })
+  const shade = k => new THREE.MeshPhongMaterial({ color: new THREE.Color(color).multiplyScalar(k), shininess: 55 })
+  const mat = shade(1), cuffMat = shade(0.82), bandMat = shade(0.62)
   for (const side of ['Left', 'Right']) {
     const hand = model.getObjectByName(prefix + side + 'Hand'); if (!hand) continue
     for (const f of hand.children) if (f.isBone) f.scale.setScalar(0.001)
     const s = side === 'Left' ? -1 : 1
-    const body = new THREE.Mesh(new THREE.LatheGeometry(GLOVE_PROFILE, 24), mat); body.scale.set(1, 1, 0.84); body.position.z = 0.8
-    const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(2.9, 6.5, 6, 12), mat); thumb.position.set(s * 7.6, 8.2, 2.4); thumb.rotation.z = s * 0.22
-    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(5.0, 5.3, 8.5, 20), cuffMat); cuff.position.y = -4.2
-    const trim = new THREE.Mesh(new THREE.CylinderGeometry(5.25, 5.25, 1.1, 20), trimMat); trim.position.y = -0.4
-    hand.add(body, thumb, cuff, trim)
+    const body = new THREE.Mesh(new THREE.LatheGeometry(GLOVE_PROFILE, 28), mat); body.scale.set(1, 1, 0.8); body.position.z = 0.8
+    const thumb = new THREE.Mesh(new THREE.SphereGeometry(1, 18, 14), mat); thumb.scale.set(3.7, 6.4, 3.9); thumb.position.set(s * 9.2, 7.4, 1.8); thumb.rotation.z = s * 0.2
+    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(6.5, 6.7, 7.6, 24), cuffMat); cuff.position.y = -3.4; cuff.scale.z = 0.86
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(6.85, 6.95, 2.8, 24), bandMat); band.position.y = -3.6; band.scale.z = 0.86
+    hand.add(body, thumb, cuff, band)
   }
 }
 function buildBoxer(x, facing, tint) {
@@ -338,6 +343,8 @@ function applyMotors(bx, dt) {
     if (sn > 1e-6) axis.set(qe.x / sn, qe.y / sn, qe.z / sn); else axis.set(0, 0, 0)
     const wb = m.body.angvel(), wp = m.parent.angvel()
     let relax = (m.arm ? bx.stun : bx.spineStun ?? bx.stun) * (m.arm ? (m.elbow && bx.hooking ? Math.max(bx.arm[m.arm], P.hookElbow) : bx.arm[m.arm]) : 1)
+    if (m.arm && bx.sim.guard && bx.sim.state === 'idle') relax *= P.guardArmRelax   // guarding: the springs place the gloves, the elbows hang in under them
+    if (m.arm && m.arm === bx.sim.punchHand && bx.sim.state === 'punch') relax *= bx.driveMul ?? 1   // the arm that ran into a firm guard goes slack too (clip-led punches push with their motors, not the glove force)
     if (m.part.name === 'head' && (bx.sim.state === 'punch' || bx.sim.guard || bx.sincePunch < 0.3)) relax *= P.neckBoost
     if (m.part.name === 'torso' && ((bx.sim.state === 'punch' && punchPhase(bx.sim) === 'recovery') || (bx.sim.state === 'idle' && bx.sincePunch < 0.25))) relax *= P.unwindRelax
     const w0 = 2 * Math.PI * m.f * P.kMul * Math.sqrt(relax)
@@ -399,7 +406,7 @@ function syncTarget(bx, dt) {
       bx.mirror = mirror
       // uppercuts are inside shots thrown with a bent arm, so the FEET close the distance: step in by however far the
       // target is beyond uppercut range (latched here — a target knocked away mid-punch must not drag the hips after it)
-      fx.whoosh(PUNCH[s.punch].dmgHead)
+      fx.whoosh(PUNCH[s.punch].dmgHead); bx.guardTouch = null; bx.driveMul = 1
       const gap = bx.facing * (targetHead(bx).x - bx.sim.x)
       bx.lungeAmt = s.punch === 'jab' ? P.lungeJab : UPPER[s.punch] ? Math.min(P.lungeUpperMax, Math.max(P.lungeUpperMin, gap - P.upperRange)) : P.lunge
       playTarget(bx, name, clips[name].duration / (TOTAL(s.punch) * s.punchT) * (P.clipLed[s.punch] ? P.clipRate : 1), 0.06, true)
@@ -423,6 +430,8 @@ function syncTarget(bx, dt) {
 }
 
 // ---------- guard: gloves at the chin (Punchers stance) ----------
+// how well the raised guard holds right now: loosened for a moment by every punch it takes, weaker on tired arms
+const guardStrength = bx => (1 - P.guardShockMax * (bx.guardShock || 0)) * (P.guardTired + (1 - P.guardTired) * bx.sim.stamina / 100)
 const chin = new THREE.Vector3()
 function driveGuard(bx, dt) {
   const s = bx.sim
@@ -447,8 +456,10 @@ function driveGuard(bx, dt) {
     gv.copy(part.gloveLocal).applyQuaternion(qb.set(r.x, r.y, r.z, r.w)).add(tv.set(t.x, t.y, t.z))
     const side = handSide(bx, hand)   // NOT sign(gv.z): a glove that crossed the centre line must still come back to its own side
     if (block) {
-      // high guard: both gloves side by side right in front of the face
-      chin.set(h.x + bx.facing * 0.17, h.y + 0.02, side * 0.06)
+      // high guard: gloves side by side at cheek / chin level, close to the face and nearly touching — that is where punches
+      // arrive (6–12 cm below the head centre); up at eye level with a gap between them, straights went in underneath.
+      // (Mixamo's 'Center Block' pose was tried as the target: elbows up and flared, the chin wide open — cross blocked 0 %.)
+      chin.set(h.x + bx.facing * P.guardFwd, h.y + P.guardY, side * P.guardWide)
     } else {
       // relaxed guard: lead glove a little forward of the chin, rear glove touching it
       const lead = hand === 'L'
@@ -462,7 +473,7 @@ function driveGuard(bx, dt) {
       chin.z += side * 0.10 * Math.sin(e * Math.PI)   // bulge out to the glove's own side on the way back: never brush the other glove
     }
     const vel = fore.linvel()
-    const k = block ? P.blockK : retract ? P.retractK : P.guardK, d = block ? P.blockD : retract ? P.retractD : P.guardD
+    const k = block ? P.blockK * guardStrength(bx) : retract ? P.retractK : P.guardK, d = block ? P.blockD : retract ? P.retractD : P.guardD
     fv.subVectors(chin, gv).multiplyScalar(k).sub(cv.set(vel.x, vel.y, vel.z).multiplyScalar(d))
     fore.applyImpulse({ x: fv.x * dt, y: fv.y * dt, z: fv.z * dt }, true)
   }
@@ -567,7 +578,7 @@ function drivePunch(bx, opp, dt) {
     // aim through the head. The glove starts out on its own shoulder line and lags the target, so steer against
     // the sideways error (aimLead) — otherwise a rear-hand punch runs parallel to the centre line and only grazes.
     // (clip-led punches keep their old aim: the clip already carries the glove to the centre line)
-    tv.set(h.x + bx.facing * (clipLed && hook ? P.throughClipHook : P.through), h.y, clipLed ? h.z + side * 0.12 : h.z + side * P.aimSide - P.aimLead * (gv.z - h.z))
+    tv.set(h.x + bx.facing * (clipLed && hook ? P.throughClipHook : P.through), h.y, clipLed ? h.z + side * (hook ? 0.12 : P.aimClip) : h.z + side * P.aimSide - P.aimLead * (gv.z - h.z))   // the lead hook keeps its old line (0.06 made it miss at close range)
     const prog = Math.max(0, (s.stateTime - p.windup * f * 0.7) / (p.live * f))
     // ease the target out from the glove's start point so the force ramps instead of slamming
     if (!bx.liveStart) bx.liveStart = gv.clone()
@@ -588,6 +599,7 @@ function drivePunch(bx, opp, dt) {
   fv.y += (tv.y - gv.y) * P.punchK * (P.kY - 1) - vel.y * P.dY   // stiffer + damped in height: punches sagged to chest level against the arm's own pose
   const fmax = P.punchFmax * (hook ? P.hookMul : upper ? P.upperMul : s.punch === 'cross' ? 1.15 : 0.85) * (clipLed ? P.clipForce : 1)
   if (fv.length() > fmax) fv.setLength(fmax)
+  fv.multiplyScalar(bx.driveMul ?? 1)   // a punch that ran into a firm guard loses its drive; only its momentum (and a shaken guard) lets it through
   fore.applyImpulse({ x: fv.x * dt, y: fv.y * dt, z: fv.z * dt }, true)
   const lean = s.punch === 'jab' || upper ? P.leanMul * 0.4 : P.leanMul   // jab: head stays behind the shoulder; uppercut drives UP, the torso must not fold forward
   // lean in, but never fold: once the torso pitches past maxLean the body stops following the arm
@@ -599,6 +611,8 @@ function drivePunch(bx, opp, dt) {
 
 // ---------- contact → hit (R3) ----------
 let lastHit = '', slowT = 0   // slowT: real seconds of knockdown slow-motion left
+let now = 0                    // sim clock (scaled by hit-stop / slow-motion like everything else)
+const hitLog = []              // what every resolved punch met: { att, punch, block: 'none' | 'partial' | 'full', dmg }
 function onContact(h1, h2) {
   const a = colMap.get(h1), b = colMap.get(h2)
   if (!a || !b || a.boxer === b.boxer) return
@@ -612,20 +626,34 @@ function onContact(h1, h2) {
       }
       continue
     }
-    if (g.part !== 'glove' || (t.part !== 'head' && t.part !== 'torso')) continue
-    const s = g.boxer.sim
-    if (t.boxer.sim.state === 'down') continue
+    if (g.part !== 'glove') continue
+    const s = g.boxer.sim, d = t.boxer.sim
+    if (d.state === 'down') continue
     if (s.state !== 'punch' || s.hitApplied || punchPhase(s) === 'windup' || g.hand !== s.punchHand) continue
+    const guarding = d.guard && d.state === 'idle'
+    if (t.part === 'glove' || t.part === 'arm') {   // ran into the raised guard: the punch loses its drive, the guard gets shaken
+      if (guarding && g.boxer.guardTouch == null) {
+        const hold = guardStrength(t.boxer), fore = g.hand === 'R' ? g.boxer.b.foreR : g.boxer.b.foreL, v = fore.linvel(), keep = 1 - P.guardBrake * hold
+        g.boxer.guardTouch = now; g.boxer.driveMul = 1 - P.guardStop * hold
+        fore.setLinvel({ x: v.x * keep, y: v.y * keep, z: v.z * keep }, true)   // a firm guard soaks the punch up; a shaken or tired one lets most of it through
+        t.boxer.guardShock = Math.min(1, (t.boxer.guardShock || 0) + P.guardShockGain * PUNCH[s.punch].dmgHead / 16)
+      }
+      continue
+    }
+    if (t.part !== 'head' && t.part !== 'torso') continue
     const target = t.part === 'head' ? 'head' : 'body'
-    const r = resolveHit(s, t.boxer.sim, target)
+    // reached the head / body: a real hit even with the guard up — halved if it had to go through the gloves first
+    const r = resolveHit(s, d, target, !guarding ? 'none' : g.boxer.guardTouch != null ? 'partial' : 'none')
+    g.boxer.guardTouch = null
     if (r.missed) continue
-    const J = r.dmg * P.hitImpulse * (r.blocked ? 0.3 : 1)
+    hitLog.push({ att: g.boxer.idx, punch: s.punch, block: r.partial ? 'partial' : 'none', dmg: r.dmg }); if (hitLog.length > 300) hitLog.shift()
+    const J = r.dmg * P.hitImpulse
     const body = target === 'head' ? t.boxer.b.head : t.boxer.b.torso
     body.applyImpulse({ x: g.boxer.facing * J, y: J * 0.15, z: 0 }, true)
     const knocked = t.boxer.sim.state === 'down'
-    fx.hit(r.dmg / C.DAMAGE_SCALE / (r.blocked ? C.GUARD_FACTOR : 1), r.blocked, knocked)
+    fx.hit(r.dmg / C.DAMAGE_SCALE, false, knocked)
     if (knocked) { slowT = P.koSlowT + 0.4; t.boxer.thudded = false }   // slow motion ONLY on a knockdown
-    lastHit = `${g.boxer.idx === 0 ? 'A' : 'B'} ${s.punch}${s.punchHand} → ${target} ${r.dmg.toFixed(1)}${r.blocked ? ' (blocked)' : ''}${r.counter ? ' COUNTER' : ''}`
+    lastHit = `${g.boxer.idx === 0 ? 'A' : 'B'} ${s.punch}${s.punchHand} → ${target} ${r.dmg.toFixed(1)}${r.partial ? ' (through the guard)' : ''}${r.counter ? ' COUNTER' : ''}`
   }
 }
 
@@ -713,7 +741,18 @@ function frame(dt) {
   const inA = { move: (keys.d ? 1 : 0) - (keys.a ? 1 : 0), guard: !!keys.s, lean: !!keys.w, punch: queued && queued.punch, hand: queued && queued.hand }
   if (match) { const was = match.phase; stepMatch(match, inA, cpuInput(dt), dt, null); if (match.phase !== was) onPhase(was, match.phase) }
   else stepBoxer(A.sim, inA, dt)
-  queued = null; introT -= dt
+  queued = null; introT -= dt; now += dt
+  for (const bx of boxers) {
+    bx.guardShock = (bx.guardShock || 0) * Math.exp(-dt / P.guardShockT)
+    const s = bx.sim
+    if (bx.guardTouch == null || s.state !== 'punch' || s.hitApplied) continue
+    const left = TOTAL(s.punch) * s.punchT - s.stateTime   // resolve before the punch ends: the sim needs att.punch
+    if (now - bx.guardTouch < P.guardWindow && left > 0.03) continue
+    const opp = bx === A ? B : A, r = resolveHit(s, opp.sim, 'head', 'full'); bx.guardTouch = null   // it never got past the gloves: blocked
+    fx.hit(r.dmg / C.DAMAGE_SCALE / C.GUARD_FACTOR, true)
+    hitLog.push({ att: bx.idx, punch: s.punch, block: 'full', dmg: r.dmg }); if (hitLog.length > 300) hitLog.shift()
+    lastHit = `${bx.idx === 0 ? 'A' : 'B'} ${s.punch}${s.punchHand} → blocked ${r.dmg.toFixed(1)}`
+  }
   for (const bx of boxers) {
     syncTarget(bx, dt)
     const down = bx.sim.state === 'down'
@@ -798,7 +837,7 @@ function frame(dt) {
   draw()
 }
 window.__frame = frame
-window.__rag = { world, A, B, P, M, camera, controls, RAPIER, punchPhase, get ball() { return ball }, get ballHits() { return ballHits }, ballHome, clips, fx, match }
+window.__rag = { world, A, B, P, M, camera, controls, RAPIER, punchPhase, get ball() { return ball }, get ballHits() { return ballHits }, ballHome, clips, fx, match, hitLog }
 window.__loadClip = async f => {   // debug: load+retarget any fbx clip for scrubbing
   const c = (await loader.loadAsync('models/' + f + '.fbx')).animations[0]
   c.tracks.forEach(t => { t.name = t.name.replace(/^mixamorig\d*/, prefix) })

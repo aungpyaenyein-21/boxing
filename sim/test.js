@@ -105,6 +105,20 @@ const idle = { move: 0, guard: false, lean: false, punch: null }
   assert(Math.abs(r.dmg - C.DAMAGE_SCALE * PUNCH.hook.dmgBody * (0.75 + 85 / 400)) < 1e-9)
 }
 
+// --- the guard is not a force field: what the punch met decides
+{
+  const mk = punch => { const att = makeBoxer(0), def = makeBoxer(0.6); def.guard = true; tryPunch(att, punch); att.stateTime = PUNCH[punch].windup + 0.01; return [att, def] }
+  const clean = p => C.DAMAGE_SCALE * PUNCH[p].dmgHead * (0.75 + (100 - PUNCH[p].stamina) / 400)
+  let [att, def] = mk('cross'); let r = resolveHit(att, def)                       // headless default: straights die on the guard
+  assert(r.blocked && Math.abs(r.dmg - clean('cross') * C.GUARD_FACTOR) < 1e-9); assert.equal(def.state, 'idle')
+  ;[att, def] = mk('hook'); r = resolveHit(att, def)                                // …hooks come round it: half blocked, still a hit
+  assert(!r.blocked && r.partial && Math.abs(r.dmg - clean('hook') * C.GUARD_PARTIAL) < 1e-9); assert.equal(def.state, 'hit')
+  ;[att, def] = mk('cross'); r = resolveHit(att, def, 'head', 'none')               // the view saw the glove reach the head untouched
+  assert(!r.blocked && !r.partial && Math.abs(r.dmg - clean('cross')) < 1e-9); assert.equal(def.state, 'hit')
+  ;[att, def] = mk('hook'); r = resolveHit(att, def, 'head', 'full')                // the view saw it die on the gloves
+  assert(r.blocked && def.stats.blocked === 1)
+}
+
 // --- uppercuts are ordinary table punches: thrown with either hand, land for their table damage
 {
   for (const [type, hand] of [['leadupper', 'L'], ['upper', 'R']]) {

@@ -13,7 +13,8 @@ export const C = {
   DAMAGE_SCALE: 0.5,     // table damage × this = hp lost. At 1.0 a fight was over in ~11 clean hits (≈20 s); rounds are 90 s for a reason
   COUNTER: 1.5,          // hitting an opponent stuck in recovery
   FATIGUE_SLOW: 1.0,     // punch duration multiplier grows to 1+this at 0 stamina — tired arms are slow arms
-  GUARD_FACTOR: 0.18,
+  GUARD_FACTOR: 0.18,    // a punch that dies on the guard: chip damage only
+  GUARD_PARTIAL: 0.5,    // a punch that got through / round the guard after touching it
   GUARD_STAMINA: 7,      // defender pays this per blocked punch
   MOMENTUM_K: 0.35,      // ponytail: extra damage per m/s of forward speed, tune by feel in Phase 5
   MOVE_SPEED: 1.4,

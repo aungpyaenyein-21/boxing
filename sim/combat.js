@@ -39,7 +39,11 @@ export function tryPunch(b, type) {
 }
 
 // att's punch (in live phase) reaches def. Returns what happened.
-export function resolveHit(att, def, target = 'head') {
+// block — how much of the guard the punch met: 'full' (died on the gloves) | 'partial' (touched them, still got in) | 'none'.
+// The physics view passes what the glove REALLY touched, so holding the guard up is no promise. Headless default: a raised
+// guard stops straights, while hooks and uppercuts come round / under it and are only half blocked.
+const ROUND_THE_GUARD = { leadhook: true, hook: true, leadupper: true, upper: true }
+export function resolveHit(att, def, target = 'head', block) {
   att.hitApplied = true
   if (target === 'head' && def.lean > 0.5) return { missed: true }
   const p = PUNCH[att.punch]
@@ -49,12 +53,14 @@ export function resolveHit(att, def, target = 'head') {
   if (fwd > 0) dmg *= 1 + fwd * C.MOMENTUM_K
   const counter = def.state === 'punch' && punchPhase(def) === 'recovery'
   if (counter) dmg *= C.COUNTER
-  const blocked = def.guard && def.state === 'idle'
+  if (block === undefined) block = !(def.guard && def.state === 'idle') ? 'none' : ROUND_THE_GUARD[att.punch] ? 'partial' : 'full'
+  const blocked = block === 'full', partial = block === 'partial'
   if (blocked) {
     dmg *= C.GUARD_FACTOR
     def.stamina = Math.max(0, def.stamina - C.GUARD_STAMINA)
     def.stats.blocked++
   } else {
+    if (partial) { dmg *= C.GUARD_PARTIAL; def.stamina = Math.max(0, def.stamina - C.GUARD_STAMINA / 2) }
     att.stats.landed++
     if (att.punch !== 'jab') att.stats.power++
     def.state = 'hit'; def.stateTime = 0; def.punch = null
@@ -70,7 +76,7 @@ export function resolveHit(att, def, target = 'head') {
     def.state = 'down'; def.stateTime = 0
     def.knockdowns++
   }
-  return { dmg, blocked, counter, target }
+  return { dmg, blocked, partial, counter, target }
 }
 
 // input: { move: -1|0|1, guard: bool, lean: bool, punch: 'jab'|'hook'|null }

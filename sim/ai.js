@@ -19,6 +19,7 @@ const COMBOS = [
   [['jab'], 9], [['jab', 'cross'], 9], [['jab', 'jab', 'cross'], 9], [['jab', 'cross', 'leadhook'], 9], [['cross', 'leadhook'], 9],
   [['jab', 'hook'], 9], [['leadhook', 'cross'], 9], [['leadupper', 'cross'], 0.72], [['jab', 'upper'], 0.72], [['leadupper', 'upper', 'leadhook'], 0.72],
 ]
+const ROUND = { leadhook: true, hook: true, leadupper: true, upper: true }
 const IDLE = { move: 0, guard: false, lean: false, punch: null, hand: 'L' }
 
 export function makeAI(level = 2, rng = Math.random, range = 0.82) {
@@ -69,7 +70,9 @@ export function stepAI(ai, me, opp, dt) {
   if (ai.cool > 0) { inp.move = gap > ai.range + 0.3 ? toward : gap < ai.range - 0.12 ? -toward : 0; return inp }
 
   // --- start something ---
-  const pool = COMBOS.filter(([c, need]) => gap <= Math.max(need, ai.range + 0.1) && (c.length === 1 || ai.rng() < ai.combo))
+  // a raised guard stops straights but not what comes round or under it: finish with a hook / uppercut then
+  const opens = c => ROUND[c[c.length - 1]]
+  const pool = COMBOS.filter(([c, need]) => gap <= Math.max(need, ai.range + 0.1) && (c.length === 1 || ai.rng() < ai.combo) && (!opp.guard || opens(c) || ai.rng() > ai.combo))
   const pick = pool.length ? pool[Math.floor(ai.rng() * pool.length)][0] : ['jab']
   ai.plan = pick.slice()
   return inp
