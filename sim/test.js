@@ -104,6 +104,18 @@ const idle = { move: 0, guard: false, lean: false, punch: null }
   assert(Math.abs(r.dmg - PUNCH.hook.dmgBody * (0.75 + 85 / 400)) < 1e-9)
 }
 
+// --- uppercuts are ordinary table punches: thrown with either hand, land for their table damage
+{
+  for (const [type, hand] of [['leadupper', 'L'], ['upper', 'R']]) {
+    const att = makeBoxer(0), def = makeBoxer(0.6)
+    stepBoxer(att, { ...idle, punch: type, hand }, dt)
+    assert.equal(att.punch, type); assert.equal(att.punchHand, hand)
+    att.stateTime = PUNCH[type].windup + 0.01
+    const r = resolveHit(att, def, 'head')
+    assert(!r.missed && Math.abs(r.dmg - PUNCH[type].dmgHead * (0.75 + att.stamina / 400)) < 1e-9, `${type} dmg ${r.dmg}`)
+  }
+}
+
 // --- knockdown, count, rise with 38hp
 {
   const att = makeBoxer(0), def = makeBoxer(1)

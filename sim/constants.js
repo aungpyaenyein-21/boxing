@@ -5,6 +5,8 @@ export const PUNCH = {
   cross: { windup: 0.08, live: 0.11, recovery: 0.21, dmgHead: 11.0, dmgBody: 7.4, stamina: 10, reach: 1.15 },  // rear straight: hip rotation + rear-foot pivot
   leadhook: { windup: 0.09, live: 0.10, recovery: 0.22, dmgHead: 13.5, dmgBody: 8.6, stamina: 12, reach: 0.90 },  // #3: compact, elbow 90°, quick return (Punchers ≈0.5s)
   hook: { windup: 0.15, live: 0.16, recovery: 0.32, dmgHead: 16.0, dmgBody: 10.5, stamina: 15, reach: 0.95 },  // #4 rear hook: big windup, wide arc, overshoot + follow-through (≈0.8s)
+  leadupper: { windup: 0.10, live: 0.11, recovery: 0.22, dmgHead: 12.5, dmgBody: 8.5, stamina: 12, reach: 0.85 },  // #5 lead uppercut: short dip, drives up under the chin, elbow bent
+  upper: { windup: 0.14, live: 0.13, recovery: 0.30, dmgHead: 15.0, dmgBody: 10.0, stamina: 15, reach: 0.90 },  // #6 rear uppercut: deeper knee bend + hip rotation, the inside power shot
 }
 
 export const C = {

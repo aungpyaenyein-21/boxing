@@ -189,3 +189,19 @@ Sources: FightCamp "Six basic boxing punches", ExpertBoxing "How to throw a jab"
 ## Hook shape fix (records/left hook bug.mov, 2026-09-11)
 User's recording of our game: the lead hook looked like a straight punch — the glove force pulled the arm to full extension and the sideways arc is invisible from the side camera.
 Fix: hooks now drive the glove along a **circle of radius 0.46 m around the real shoulder joint** (upper-arm body + joint anchor), sweeping −20° → 115° (side → past the front); the elbow motor keeps ≥0.8 stiffness during hooks so the arm stays bent (~90°). Measured shoulder→glove during a hook 0.32 m vs 0.60 straight.
+
+---
+
+# Uppercuts (#5 lead, #6 rear) — 2026-09-19
+
+Source clips: `models/left uppercut.fbx` (f16–40) and `models/right uppercut.fbx` (f8–38). Both takes are **body** uppercuts: the fist dips to the waist (lead y≈0.87, rear y≈0.65) and drives forward at belly height, torso folding ~45°.
+
+## Applied
+- sim: `leadupper` 0.10/0.11/0.22 s, 12.5 head dmg, stamina 12 · `upper` 0.14/0.13/0.30 s, 15 head dmg, stamina 15. Keys: **Shift+←** / **Shift+→**. The CPU throws them too.
+- The clip supplies the knee bend (hips follow the clip's dip, ≈10–14 cm), the hand drop and the bent arm. `drivePunch` then steers the fist: slide **under** the chin (`upperUnder` 0.28 m below, first `upperSplit` of the drive), then **straight up through it** (`upperThrough` 0.22 m above) and keep rising for the first 30 % of the recovery.
+- Torso and hip tilt from the clip are slerped 80 % back to upright (`upperUpright`) — a chin uppercut drives up, it does not fold forward. Measured torso pitch 13° lead / 20° rear.
+- Shoulder loosens once the fist starts up (`upperRelax` 0.3) so the force can lift it to the chin; the elbow motor stays stiff → elbow ≈ 65–90° at contact.
+- Reach is a bent arm only (`upperReach` 0.38 m ahead of the shoulder) + hip turn (`upperYaw` 45° rear, 27° lead). The **feet** close the distance: the step-in is `gap − upperRange` (0.32), clamped to 0.10–0.40 m and latched when the punch starts; it is finished by 60 % of windup+live (`upperStepT`) and stays planted until the recovery — step, plant, drive up. In a duel (gap 0.6) the step is ≈0.20 m; at the solo ball's 0.80 m it is the full 0.40 m.
+- The rise is keyed to the fist being **under** the target (`upperNear` 0.22 m horizontally, latched) rather than to a timer — on a timer the rear fist was already above chin height when it arrived and hit the ball downward from the front. The follow-through is damped so the arm doesn't shoot out straight overhead.
+- Result: both uppercuts land from 0.55 to 0.85 m at full and low stamina and send the ball upward (≈3–5 m/s). Duel, passive opponent: 12.1 / 14.4 to the head, 3 of 3 each.
+- Harnesses: `dev/trace_upper.js` (path/shape), `dev/sweep_upper.js` (hit/miss across distances and stamina).

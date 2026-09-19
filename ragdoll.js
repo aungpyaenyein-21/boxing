@@ -32,7 +32,7 @@ const loader = new FBXLoader()
 const src = await loader.loadAsync('models/Y Bot.fbx')
 let prefix = 'mixamorig'
 src.traverse(o => { const m = o.name.match(/^(mixamorig\d*)Hips$/); if (m) prefix = m[1] })
-const CLIP_FILES = { idle: 'Idle', block: 'Center Block', jab: 'left jab', cross: 'Cross Punch', hookR: 'Hook Punch', hookL: 'left hook' }
+const CLIP_FILES = { idle: 'Idle', block: 'Center Block', jab: 'left jab', cross: 'Cross Punch', hookR: 'Hook Punch', hookL: 'left hook', upperL: 'left uppercut', upperR: 'right uppercut' }
 const clips = {}
 for (const [n, f] of Object.entries(CLIP_FILES)) {
   const c = (await loader.loadAsync('models/' + f + '.fbx')).animations[0]
@@ -45,6 +45,10 @@ clips.hookR = THREE.AnimationUtils.subclip(clips.hookR, 'hookR', 18, 52, 30)   /
 // new Mixamo 'left jab' / 'left hook' (2026-09-13): strike spans measured on the target skeleton
 clips.jab = THREE.AnimationUtils.subclip(clips.jab, 'jab', 4, 22, 30)      // extension peaks f10–12
 clips.hookL = THREE.AnimationUtils.subclip(clips.hookL, 'hookL', 6, 30, 30) // load f8–12, swing across f14–18, settle f30
+// uppercuts (2026-09-19): both takes are BODY uppercuts — the fist dips to the waist, then drives forward at belly height.
+// The clip supplies the knee bend, the dip and the bent arm; drivePunch lifts the fist up through the chin.
+clips.upperL = THREE.AnimationUtils.subclip(clips.upperL, 'upperL', 16, 40, 30)   // hand drops f16–24, drives f24–28, back by f40
+clips.upperR = THREE.AnimationUtils.subclip(clips.upperR, 'upperR', 8, 38, 30)    // hand drops f10–16, drives f16–22, back by f38
 // the two clips are different takes and stand differently (jab: feet 7cm narrower front-to-back, 15cm wider sideways).
 // give the jab the hook's legs so the stance and footwork read as the same fighter.
 const LEG_BONES = ['UpLeg', 'Leg', 'Foot', 'ToeBase']
@@ -75,10 +79,11 @@ const P = {
   kMul: 1.5, cMul: 1, gc: 1,           // motors (R1 sweep)
   punchK: 1900, punchD: 110, punchFmax: 1350, leanMul: 0.35, hookMul: 1.7, // R2 — Punchers cross: extension ≈0.08s, arm locks out; hooks need more force to follow the arc
   easeLive: 0.6, easeRetract: 0.15, armLerp: 0.04,
-  clipLed: { jab: true, leadhook: true }, armRelaxClip: 0.8, clipForce: 0.7, limbMode: 2, limbReact: 0.3, limbIeff: 1,   // these punches follow the Mixamo clip; force only guarantees contact                           // smoothness: target travels on an ease curve, arm stiffness blends
+  clipLed: { jab: true, leadhook: true, leadupper: true, upper: true }, armRelaxClip: 0.8, clipForce: 0.7, limbMode: 2, limbReact: 0.3, limbIeff: 1,   // these punches follow the Mixamo clip; force only guarantees contact                           // smoothness: target travels on an ease curve, arm stiffness blends
   armRelax: 0.35, stunRelax: 0.25, hitImpulse: 4.5,                           // R3
   lunge: 0.16, lungeJab: 0.12,                                             // hips step in during a punch (m) — Punchers cross ≈ 20–30cm (less here: the kinematic hips drag the torso)
   through: 0.26, throughClipHook: 0.3, clipDamp: 0, clipRate: 1.25, hookArc: 0.45,
+  upperUnder: 0.28, upperThrough: 0.22, upperBack: 0.04, upperSplit: 0.45, upperYaw: 45, upperRange: 0.32, lungeUpperMin: 0.1, lungeUpperMax: 0.4, upperNear: 0.22, upperStepT: 0.6, upperMul: 1.3, upperUpright: 0.8, upperFollow: 0.3, upperReach: 0.38, upperRelax: 0.3,   // uppercut: under the chin by upperSplit of the drive, then straight up through it
   kY: 2.5, dY: 40, aimSide: 0, aimLead: 1.5, holdDist: 0.1, easeCross: 0.9, hookLead: 45, hookPast: 50, hookHold: 60, hookD: 30, hookGate: 0.65, hookRmin: 0.32, hookRmax: 0.5,                 // straight-punch aim offset to the glove's own side; brake only within holdDist of the target; rear-hook sweep ease + max arc radius                                             // punch-through depth (straightens the elbow), hook side offset
   hookWind: 0.35, hookFollow: 0.5, hookYaw: 50,                            // hook: glove pulled back+out on windup, swings past the target, torso rotates more
   hookR: 0.46, hookRrear: 0.58, hookElbow: 0.8, hookSweep: [-20, 120],     // hook = glove on an arc around the shoulder; lead hook tight (elbow ~90°), rear hook wider (arm nearly straight, Punchers)
@@ -214,6 +219,7 @@ if (SOLO) {
 }
 const targetHead = bx => ball ? ball.translation() : (bx === A ? B : A).b.head.translation()
 
+const UPPER = { leadupper: true, upper: true }, QID = new THREE.Quaternion()
 // ---------- motors (R1) ----------
 const qp = new THREE.Quaternion(), qb = new THREE.Quaternion(), qe = new THREE.Quaternion(), qd = new THREE.Quaternion(), qpd = new THREE.Quaternion(), qi = new THREE.Quaternion()
 const fwd = new THREE.Vector3(), yawQ = new THREE.Quaternion(), Y_AXIS = new THREE.Vector3(0, 1, 0)
@@ -234,6 +240,8 @@ function applyMotors(bx, dt) {
       qd.premultiply(qpd.invert())
     } else {   // parent is the kinematic hips: use exactly the rotation we gave them
       qd.premultiply(qpd.copy(bx.hipsDelta).invert())
+      // uppercut: the mocap takes are body shots that fold the torso ~45° forward; a chin uppercut drives UP, so keep most of it upright
+      if (UPPER[bx.sim.punch] && bx.sim.state === 'punch') qd.slerp(QID, P.upperUpright)
     }
     // (else parent is the kinematic hips, rotation identity: desired is absolute)
     qe.copy(qp).multiply(qd).multiply(qb.clone().invert())
@@ -291,10 +299,14 @@ function syncTarget(bx, dt) {
   const s = bx.sim
   if (s.state === 'punch') { bx.sincePunch = 0; bx.lastHand = s.punchHand } else bx.sincePunch = (bx.sincePunch ?? 9) + dt
   if (s.state === 'punch') {
-    let name = s.punch === 'hook' ? 'hook' + s.punchHand : s.punch === 'leadhook' ? 'hookL' : s.punch   // jab / cross / hookL / hookR
+    let name = s.punch === 'hook' ? 'hook' + s.punchHand : s.punch === 'leadhook' ? 'hookL' : s.punch === 'leadupper' ? 'upperL' : s.punch === 'upper' ? 'upperR' : s.punch   // jab / cross / hookL / hookR / upperL / upperR
     const mirror = false                     // hookL is now the real Hook.fbx (mirroring kept as an option)
     if (bx.cur !== name || bx.mirror !== mirror) {
       bx.mirror = mirror
+      // uppercuts are inside shots thrown with a bent arm, so the FEET close the distance: step in by however far the
+      // target is beyond uppercut range (latched here — a target knocked away mid-punch must not drag the hips after it)
+      const gap = bx.facing * (targetHead(bx).x - bx.sim.x)
+      bx.lungeAmt = s.punch === 'jab' ? P.lungeJab : UPPER[s.punch] ? Math.min(P.lungeUpperMax, Math.max(P.lungeUpperMin, gap - P.upperRange)) : P.lunge
       playTarget(bx, name, clips[name].duration / (TOTAL(s.punch) * s.punchT) * (P.clipLed[s.punch] ? P.clipRate : 1), 0.06, true)
     }
   } else {
@@ -306,10 +318,11 @@ function syncTarget(bx, dt) {
   let want = 0
   if (s.state === 'punch') {
     const p = PUNCH[s.punch], f = s.punchT, t = s.stateTime
-    const tl = (p.windup + p.live) * f, tr = p.recovery * f
-    const amount = s.punch === 'jab' ? P.lungeJab : P.lunge   // step jab: inches, not a lunge
+    // uppercut: step, plant, THEN drive up — the step is done early (upperStepT of windup+live), not still sliding in at contact
+    const tEnd = (p.windup + p.live) * f, tl = tEnd * (UPPER[s.punch] ? P.upperStepT : 1), tr = p.recovery * f   // planted from tl until the recovery starts
+    const amount = bx.lungeAmt ?? P.lunge   // step jab: inches, not a lunge; uppercut: as far as the target needs
     // ease in fast, ease back out over the whole recovery + a bit: an abrupt un-wind reads as a stagger
-    want = amount * (t < tl ? smooth(Math.min(1, t / tl)) : 1 - smooth(Math.min(1, (t - tl) / (tr + P.unwindExtra))))
+    want = amount * (t < tl ? smooth(Math.min(1, t / tl)) : t < tEnd ? 1 : 1 - smooth(Math.min(1, (t - tEnd) / (tr + P.unwindExtra))))
   }
   bx.lungeX += (want - bx.lungeX) * Math.min(1, dt * (want > bx.lungeX ? 20 : P.unwindRate))
 }
@@ -319,9 +332,9 @@ const chin = new THREE.Vector3()
 function driveGuard(bx, dt) {
   const s = bx.sim
   let recovering = (s.state === 'punch' && punchPhase(s) === 'recovery') || (s.state === 'idle' && bx.sincePunch < 0.2)
-  if (s.state === 'punch' && (s.punch === 'hook' || s.punch === 'leadhook')) {   // hooks follow through first, then snap back
+  if (s.state === 'punch' && (s.punch === 'hook' || s.punch === 'leadhook' || UPPER[s.punch])) {   // hooks / uppercuts follow through first, then snap back
     const p = PUNCH[s.punch], f = s.punchT
-    if ((s.stateTime - (p.windup + p.live) * f) / (p.recovery * f) < (s.punch === 'leadhook' ? 0.25 : 0.4)) recovering = false
+    if ((s.stateTime - (p.windup + p.live) * f) / (p.recovery * f) < (s.punch === 'leadhook' ? 0.25 : UPPER[s.punch] ? P.upperFollow : 0.4)) recovering = false
   }
   if (!recovering) bx.retractStart = null
   const h = bx.b.head.translation()
@@ -371,20 +384,23 @@ function drivePunch(bx, opp, dt) {
   if (s.state !== 'punch') {
     bx.hooking = false
     bx.arm.L += (1 - bx.arm.L) * Math.min(1, dt / P.armLerp); bx.arm.R += (1 - bx.arm.R) * Math.min(1, dt / P.armLerp)
-    bx.liveStart = null; bx.hookEnd = null
+    bx.liveStart = null; bx.hookEnd = null; bx.upperK = 0
     return
   }
   const lead = s.punch === 'leadhook', hook = s.punch === 'hook' || lead
-  bx.hooking = lead ? 'lead' : hook ? 'rear' : false
+  bx.hooking = lead ? 'lead' : hook ? 'rear' : UPPER[s.punch] ? 'upper' : false   // truthy → elbow motor stays stiff (arm keeps its bend)
   const p = PUNCH[s.punch], f = s.punchT
   const recProg = ph === 'recovery' ? (s.stateTime - (p.windup + p.live) * f) / (p.recovery * f) : 0
-  const follow = hook && ph === 'recovery' && recProg < (lead ? 0.25 : 0.4)   // hook keeps swinging past the target (lead: less)
+  const upper = !!UPPER[s.punch]
+  const follow = ph === 'recovery' && (hook ? recProg < (lead ? 0.25 : 0.4) : upper && recProg < P.upperFollow)   // hook keeps swinging past the target (lead: less); uppercut keeps rising
   const clipLed = !!P.clipLed[s.punch]
-  const wantRelax = (ph === 'recovery' && !follow) ? 1 : clipLed ? P.armRelaxClip : P.armRelax   // clip-led: arm mostly follows the mocap
+  // clip-led: arm mostly follows the mocap. Uppercuts: the clip shapes the dip, but its drive is a belly-high body shot —
+  // once the fist starts up, loosen the shoulder so the force can carry it to the chin (the elbow is held bent separately)
+  const wantRelax = (ph === 'recovery' && !follow) ? 1 : clipLed ? (upper && ph !== 'windup' ? P.upperRelax : P.armRelaxClip) : P.armRelax
   bx.arm[hand] += (wantRelax - bx.arm[hand]) * Math.min(1, dt / P.armLerp)
   const lateWindup = ph === 'windup' && s.stateTime > p.windup * f * 0.7   // start driving before the table says 'live' so momentum carries over
   // clip-led hook: the clip carries its own load-up and follow-through, force only in the live phase
-  if (ph !== 'live' && !lateWindup && !(hook && ph === 'windup' && !clipLed) && !(follow && !clipLed)) return
+  if (ph !== 'live' && !lateWindup && !(hook && ph === 'windup' && !clipLed) && !(follow && (!clipLed || upper))) return
   const fore = hand === 'R' ? bx.b.foreR : bx.b.foreL
   const part = bx.parts.find(p => p.body === fore)
   const t = fore.translation(), r = fore.rotation()
@@ -398,6 +414,29 @@ function drivePunch(bx, opp, dt) {
   } else if (follow && !clipLed && !hook) {
     // overshoot: swing across to the other side and up, like a real hook that missed
     tv.set(h.x + bx.facing * 0.1, h.y + (lead ? 0.08 : 0.25), -side * P.hookFollow * (lead ? 0.5 : 1))   // lead: just past the far shoulder
+  } else if (upper) {
+    // uppercut: slide in UNDER the chin first, then drive straight up through it. The clip keeps the elbow bent and
+    // bends the knees; this only steers the fist (a straight line from the dip to the chin would be a rising cross).
+    const prog = Math.max(0, (s.stateTime - p.windup * f * 0.7) / (p.live * f))
+    const e = smooth(Math.min(1, prog / P.easeLive))
+    if (!bx.liveStart) bx.liveStart = gv.clone()
+    const upperArm = hand === 'R' ? bx.b.upperR : bx.b.upperL, uam = bx.motors.find(m => m.body === upperArm)
+    const ut = upperArm.translation(), ur = upperArm.rotation()
+    sv.set(uam.pivot.x, uam.pivot.y, uam.pivot.z).applyQuaternion(qb.set(ur.x, ur.y, ur.z, ur.w)).add(cv.set(ut.x, ut.y, ut.z))   // shoulder joint
+    // an uppercut is an inside shot thrown with a bent arm: it rises at ITS range (shoulder + upperReach); a target
+    // beyond that gets a whiff in front of the chin, not an arm that straightens out to reach it
+    const want = h.x - bx.facing * P.upperBack, lim = sv.x + bx.facing * P.upperReach
+    // steer against the sideways error like the cross does: the rear fist otherwise rises along its own hip line and passes beside the chin
+    const ux = bx.facing > 0 ? Math.min(want, lim) : Math.max(want, lim), uz = h.z + side * 0.04 - P.aimLead * (gv.z - h.z)
+    // the rise is keyed to WHERE the fist is, not to a timer: it goes up once it is under the target (latched, so a
+    // target knocked away doesn't drop it again). On a timer the rear fist was already above chin height when it
+    // arrived and hit the target downward from the front. Late fallback so a whiff still rises.
+    const hd = Math.hypot(gv.x - ux, gv.z - (h.z + side * 0.04))
+    bx.upperK = Math.max(bx.upperK || 0, 1 - hd / P.upperNear, (e - 0.7) / 0.3)
+    const rise = smooth(Math.min(1, Math.max(0, bx.upperK)))
+    tv.set(ux, h.y - P.upperUnder, uz).lerpVectors(bx.liveStart, tv, Math.min(1, e / P.upperSplit))
+    tv.y += (P.upperUnder + P.upperThrough) * rise
+    bx.holding = false
   } else if (hook && !clipLed) {
     // hook: the glove sweeps on a circle around the shoulder (radius < arm length → elbow stays bent),
     // from out to the side, through the front, past it. The torso yaw carries it the rest of the way.
@@ -446,13 +485,14 @@ function drivePunch(bx, opp, dt) {
   // extra damping once the arm is out: no bounce at full extension. The rear hook's sweep gets its own, lighter damping —
   // with punchD the glove's top speed is K·lead/D ≈ 7 m/s no matter how hard it is pulled
   const sweeping = hook && !clipLed && !follow && !(ph === 'windup' && !lateWindup)
-  const damp = clipLed ? P.clipDamp : sweeping && !bx.holding ? P.hookD : P.punchD * (bx.holding && ph === 'live' ? 1.8 : 1)
+  // (uppercut follow-through is damped: undamped, the fist overshot and the arm shot out straight overhead)
+  const damp = clipLed ? (upper && follow ? P.punchD : P.clipDamp) : sweeping && !bx.holding ? P.hookD : P.punchD * (bx.holding && ph === 'live' ? 1.8 : 1)
   fv.subVectors(tv, gv).multiplyScalar(P.punchK).sub(cv.set(vel.x, vel.y, vel.z).multiplyScalar(damp))
   fv.y += (tv.y - gv.y) * P.punchK * (P.kY - 1) - vel.y * P.dY   // stiffer + damped in height: punches sagged to chest level against the arm's own pose
-  const fmax = P.punchFmax * (hook ? P.hookMul : s.punch === 'cross' ? 1.15 : 0.85) * (clipLed ? P.clipForce : 1)
+  const fmax = P.punchFmax * (hook ? P.hookMul : upper ? P.upperMul : s.punch === 'cross' ? 1.15 : 0.85) * (clipLed ? P.clipForce : 1)
   if (fv.length() > fmax) fv.setLength(fmax)
   fore.applyImpulse({ x: fv.x * dt, y: fv.y * dt, z: fv.z * dt }, true)
-  const lean = s.punch === 'jab' ? P.leanMul * 0.4 : P.leanMul   // jab: head stays behind the shoulder
+  const lean = s.punch === 'jab' || upper ? P.leanMul * 0.4 : P.leanMul   // jab: head stays behind the shoulder; uppercut drives UP, the torso must not fold forward
   // lean in, but never fold: once the torso pitches past maxLean the body stops following the arm
   const tr = bx.b.torso.rotation()
   up.set(0, 1, 0).applyQuaternion(qb.set(tr.x, tr.y, tr.z, tr.w))
@@ -516,8 +556,8 @@ addEventListener('keydown', e => {
   if ([' ', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault()
   if (e.repeat) return
   keys[e.key.toLowerCase()] = true
-  if (e.key === 'ArrowLeft') queued = { punch: keys[' '] ? 'leadhook' : 'jab', hand: 'L' }   // 3 / 1
-  if (e.key === 'ArrowRight') queued = { punch: keys[' '] ? 'hook' : 'cross', hand: 'R' }    // 4 / 2
+  if (e.key === 'ArrowLeft') queued = { punch: e.shiftKey ? 'leadupper' : keys[' '] ? 'leadhook' : 'jab', hand: 'L' }   // 5 / 3 / 1
+  if (e.key === 'ArrowRight') queued = { punch: e.shiftKey ? 'upper' : keys[' '] ? 'hook' : 'cross', hand: 'R' }      // 6 / 4 / 2
 })
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false })
 let cpuTimer = 0
@@ -528,7 +568,8 @@ function cpuInput(dt) {   // dummy: jab when in range every 1.6s
   if (cpuTimer > 1.6 && inRange && B.sim.state === 'idle') {
     cpuTimer = 0
     // hand must match the punch: jab = lead (L), cross = rear (R), hooks either side
-    const pick = [['jab', 'L'], ['jab', 'L'], ['cross', 'R'], ['leadhook', 'L'], ['hook', 'R']][Math.floor(Math.random() * 5)]
+    const picks = [['jab', 'L'], ['jab', 'L'], ['cross', 'R'], ['leadhook', 'L'], ['hook', 'R'], ['leadupper', 'L'], ['upper', 'R']]
+    const pick = picks[Math.floor(Math.random() * picks.length)]
     return { move: 0, guard: false, lean: false, punch: pick[0], hand: pick[1] }
   }
   return { move: 0, guard: false, lean: false, punch: null }
@@ -562,11 +603,12 @@ function frame(dt) {
     th.getWorldQuaternion(qd).multiply(qi.copy(bx.hipsQ0).invert())
     fwd.set(0, 0, 1).applyQuaternion(qd)
     yawQ.setFromAxisAngle(Y_AXIS, Math.atan2(fwd.x, fwd.z)); qd.premultiply(yawQ.invert())
+    if (UPPER[bx.sim.punch] && bx.sim.state === 'punch') qd.slerp(QID, P.upperUpright)   // same for the hip tilt
     const s = bx.sim
     if (s.state === 'punch' && s.punch !== 'jab') {   // a basic jab has no hip rotation (expertboxing)
       bx.yawDir = s.punch === 'cross' || s.punchHand === 'R' ? 1 : -1
-      bx.yawAmt = s.punch === 'hook' ? P.hookYaw : s.punch === 'leadhook' ? P.hookYaw * 0.8 : P.hipYaw
-      bx.yawAmp = P.lunge
+      bx.yawAmt = s.punch === 'hook' ? P.hookYaw : s.punch === 'leadhook' ? P.hookYaw * 0.8 : UPPER[s.punch] ? P.upperYaw * (s.punch === 'upper' ? 1 : 0.6) : P.hipYaw
+      bx.yawAmp = bx.lungeAmt ?? P.lunge   // the hip turn rides the same envelope as this punch's own step
     } else if (s.state === 'punch') bx.yawDir = 0
     // hip rotation follows the same eased envelope as the lunge — and keeps easing after the sim
     // has already gone back to idle. Cutting it at the state change snapped the hips ~12° (read as a stagger).
@@ -597,8 +639,8 @@ function frame(dt) {
   ui.textContent = (B
     ? `M2 legs+hips mocap   A hp ${A.sim.hp.toFixed(0)} st ${A.sim.stamina.toFixed(0)} ${st(A.sim)}   |   B hp ${B.sim.hp.toFixed(0)} ${st(B.sim)}\n`
     : `SOLO — target ball   st ${A.sim.stamina.toFixed(0)} ${st(A.sim)}   thrown ${A.sim.stats.thrown}  hit ${ballHits}\n`) +
-    `last hit: ${lastHit}\nA/D move  S guard  ← jab(1)  → cross(2)  Space+← lead hook(3)  Space+→ rear hook(4)` +
-    (B ? `   (B punches back on its own)` : `   ↑/↓ ball height  [ ] ball distance`)
+    `last hit: ${lastHit}\nA/D move  S guard  ← jab(1)  → cross(2)  Space+← lead hook(3)  Space+→ rear hook(4)  Shift+← lead uppercut(5)  Shift+→ rear uppercut(6)` +
+    (B ? `   (B punches back on its own)` : `   ↑/↓ ball height  [ ] ball distance (${(ballHome.x - A.sim.x).toFixed(2)} m)`)
   renderer.render(scene, camera)
 }
 window.__frame = frame

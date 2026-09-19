@@ -8,7 +8,8 @@ export async function run(list = [['jab','ArrowLeft',0],['cross','ArrowRight',0]
   const shoulder = hand => { const up = hand === 'R' ? A.b.upperR : A.b.upperL; const t = up.translation(); return new THREE.Vector3(t.x, t.y, t.z) }
   const torsoPitch = () => { const r = A.b.torso.rotation(); const q = new THREE.Quaternion(r.x, r.y, r.z, r.w); const up = new THREE.Vector3(0, 1, 0).applyQuaternion(q); return THREE.MathUtils.radToDeg(Math.acos(Math.min(1, up.y))) }
   const headAng = () => { const r = A.b.head.rotation(), t = A.b.torso.rotation(); const q = new THREE.Quaternion(r.x, r.y, r.z, r.w).multiply(new THREE.Quaternion(t.x, t.y, t.z, t.w).invert()); return THREE.MathUtils.radToDeg(2 * Math.acos(Math.min(1, Math.abs(q.w)))) }
-  const kd = k => window.dispatchEvent(new KeyboardEvent('keydown', { key: k, code: k === ' ' ? 'Space' : k }))
+  let shift = false
+  const kd = k => window.dispatchEvent(new KeyboardEvent('keydown', { key: k, code: k === ' ' ? 'Space' : k, shiftKey: shift }))
   const ku = k => window.dispatchEvent(new KeyboardEvent('keyup', { key: k, code: k === ' ' ? 'Space' : k }))
   const res = {}
   const wp = new THREE.Vector3(), hp = new THREE.Vector3()
@@ -17,7 +18,7 @@ export async function run(list = [['jab','ArrowLeft',0],['cross','ArrowRight',0]
     for (let i = 0; i < 90; i++) window.__frame(dt)
     const hits0 = R.ballHits; const hand = arrow === 'ArrowLeft' ? 'L' : 'R'
     let prev = glovePos(hand), prevV = null, maxV = 0, flips = 0, maxAcc = 0, minSG = 9, maxSG = 0, maxPitch = 0, maxHead = 0, minZ = 9, maxZ = -9, punch = null, rows = [], nan = false, afterPitch = 0
-    if (space) kd(' '); window.__frame(dt); kd(arrow)
+    shift = space === 2; if (space === 1) kd(' '); window.__frame(dt); kd(arrow); shift = false
     for (let i = 0; i < 80; i++) {
       window.__frame(dt)
       if (i === 2) { ku(arrow); ku(' ') }
