@@ -281,3 +281,15 @@ Known: in a live fight both boxers sit near 10 stamina, so guard strength stays 
 - `side`: the old dead side-on view, and the mouse is yours again (OrbitControls only runs in this mode).
 - `follow`: over the player's shoulder, 1.95–2.4 m back and 1.5 m out to the side, looking at a point two-thirds of the way to the opponent's head — closer than that and his own head filled the frame.
 Both scripted modes lag the action with an exponential ease (τ 0.5 s, 0.35 s while someone is down). The impact shake still wraps only the render, so it never fights the camera.
+
+---
+
+# The ring (ring.js) — 2026-09-19
+
+Built from three.js primitives in code — no modelling tool, no downloaded assets.
+- 6 m square so the rope line lands exactly on `C.RING_HALF`: when the AI calls itself cornered, the ropes really are behind it.
+- Four ropes a side (0.42 / 0.78 / 1.14 / 1.50 m) as tubes along a quadratic curve. A quadratic only reaches half way to its control point, so the control is dropped twice the intended sag. Vertical ties lace the four together at quarter points.
+- Padded corner posts (red corners at the player's end, blue at the CPU's), a canvas deck with an 0.62 m apron, a dark skirt to the hall floor.
+- **The camera lives inside the ropes** (cine sits at z ≈ 2.5, the rope line is at 3), so nothing crosses the view; the far ropes read as background. That is why the ring is square rather than shallow.
+- Rope colliders (static slabs on the rope line, restitution 0.35) catch a falling body. The hips are kinematic and ignore them, so a knockdown in the corner is clamped to `RING_HALF − 0.2`; before that the hips slid out to 3.18 with the ropes at 3. Limbs still pass under the bottom rope, which is what really happens.
+- Canvas is a real ring blue: at pale grey it was invisible against the light hall.

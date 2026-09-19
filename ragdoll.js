@@ -10,6 +10,7 @@ import { PUNCH, C } from './sim/constants.js?v=2'
 import { makeBoxer as makeSim, stepBoxer, punchPhase, resolveHit, makeMatch, stepMatch } from './sim/combat.js?v=2'
 import { makeAI, stepAI } from './sim/ai.js?v=2'
 import { createFx } from './fx.js?v=8'
+import { buildRing, ringColliders } from './ring.js?v=2'
 
 await RAPIER.init()
 const ui = document.getElementById('ui'), big = document.getElementById('big')
@@ -26,7 +27,7 @@ camera.position.set(1.9, 1.9, 3.0)
 const controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0, 1.1, 0)
 scene.add(new THREE.HemisphereLight(0xffffff, 0x888899, 1.0))
 const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(2, 5, 3); scene.add(sun)
-scene.add(new THREE.GridHelper(6, 12, 0x9a9aa8, 0xc8c8d2))
+buildRing(THREE, scene, { half: C.RING_HALF })
 addEventListener('resize', () => { camera.aspect = W() / H(); camera.updateProjectionMatrix(); renderer.setSize(W(), H()) })
 
 // ---------- camera (C cycles) ----------
@@ -327,6 +328,7 @@ const UPPER = { leadupper: true, upper: true }, QID = new THREE.Quaternion()
 // lying on a real floor. Hips tracks are read straight from the clips (not from the mixer) so the two clips can be
 // cross-blended in the boxer's own frame — their clip spaces don't line up.
 world.createCollider(RAPIER.ColliderDesc.cuboid(30, 0.05, 30).setTranslation(0, -0.05, 0).setCollisionGroups((1 << 14) << 16 | 0xffff))   // the canvas
+ringColliders(RAPIER, world, C.RING_HALF, (1 << 13) << 16 | 0xffff)   // the ropes give a little and push a falling body back in
 const hipsTracks = name => { const c = clips[name], n = prefix + 'Hips'
   return { pos: c.tracks.find(t => t.name === n + '.position').createInterpolant(), quat: c.tracks.find(t => t.name === n + '.quaternion').createInterpolant(), dur: c.duration } }
 const KO = hipsTracks('ko'), GU = hipsTracks('getup')
@@ -843,7 +845,11 @@ function frame(dt) {
     bx.bobY = (th.position.y - bx.hipsRestY) * 0.01 * P.bobGain - crouch - (bx.sim.guard ? P.blockCrouch : 0)
     const bob = bx.bobY
     if (down) { knockdownPose(bx); bx.kdX = kp.x; bx.kdZ = kp.z; bx.bobY = kp.y }
-    const hx = bx.sim.x + bx.hipsLocal + bx.facing * (bx.lungeX + bx.stepX) + (down ? kp.x : 0), hy = bx.hipsY + (down ? kp.y : bob), hz = down ? kp.z : 0
+    let hx = bx.sim.x + bx.hipsLocal + bx.facing * (bx.lungeX + bx.stepX) + (down ? kp.x : 0)
+    // the hips are kinematic, so the rope colliders cannot stop them: a man knocked down in the corner slid out
+    // of the ring (hips at 3.18 with the ropes at 3). Keep the fall inside; his dynamic limbs still lean on the ropes.
+    if (down) hx = Math.max(-C.RING_HALF + 0.2, Math.min(C.RING_HALF - 0.2, hx))
+    const hy = bx.hipsY + (down ? kp.y : bob), hz = down ? kp.z : 0
     bx.hips.setNextKinematicTranslation({ x: hx, y: hy, z: hz })
     if (down && !bx.thudded && hy < 0.4) { bx.thudded = true; fx.thud() }   // the body meets the canvas
     // the hips are kinematic (infinite mass): when they accelerate, give every body the same Δv so the
