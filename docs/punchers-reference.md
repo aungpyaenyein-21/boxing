@@ -268,3 +268,16 @@ Fat padded pillow (lathe: near-straight sides, broad domed top), flattened front
 - The AI steps with the same clips (measured: 82 frames forward / 69 back over 25 s).
 - Harness: `dev/walk_test.js`.
 - Gotcha: `KeyframeTrack.createInterpolant().evaluate()` returns the SAME buffer every call — read each sample out before taking the next, or every sample compares equal (this silently zeroed `stepOffset` at first).
+
+---
+
+# AI pressure and camera modes — 2026-09-19
+
+**Pressure.** Measured against a player who just walks in (`dev/ai_pressure.mjs`): the AI retreated 70–77 % of its frames, sat 80 % of the fight at the ring edge and threw 16–19 punches a minute to the player's 29. Giving ground is now a choice: `canGiveGround = !cornered && !(pressing && in range && press > 0.5)`, where `pressing` reads the opponent's `vx`. It also cuts its own cool-down short when he steps in, only steps off to breathe below 18 stamina (and covers up + fires back instead if pinned there), shortens the cool-down with `press`, and when tired works behind cheap punches with slower hands. After: 5–8 % retreating, 0 % at the ring edge, 21–26 punches a minute, L3 still beats L1 23–7 of 30. New level knob `press` (0.35 / 0.75 / 0.95).
+Known: in a live fight both boxers sit near 10 stamina, so guard strength stays ≈0.5 and full blocks are rare — movement is 1D, so a cornered fighter cannot circle out to rest.
+
+**Camera** — `C` cycles, `?cam=` picks one:
+- `cine` (default): ¾ from the lead side, drifts with the action, pulls back as the gap opens; on a knockdown it drops to 0.95 m and closes on the man on the canvas.
+- `side`: the old dead side-on view, and the mouse is yours again (OrbitControls only runs in this mode).
+- `follow`: over the player's shoulder, 1.95–2.4 m back and 1.5 m out to the side, looking at a point two-thirds of the way to the opponent's head — closer than that and his own head filled the frame.
+Both scripted modes lag the action with an exponential ease (τ 0.5 s, 0.35 s while someone is down). The impact shake still wraps only the render, so it never fights the camera.

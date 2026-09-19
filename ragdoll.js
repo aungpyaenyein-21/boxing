@@ -29,6 +29,56 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(2, 5, 3)
 scene.add(new THREE.GridHelper(6, 12, 0x9a9aa8, 0xc8c8d2))
 addEventListener('resize', () => { camera.aspect = W() / H(); camera.updateProjectionMatrix(); renderer.setSize(W(), H()) })
 
+// ---------- camera (C cycles) ----------
+// cine   ¾ from the lead side, drifts with the action, drops low and close on a knockdown — the default
+// side   the old one: dead side-on, and the mouse is yours (OrbitControls)
+// follow over the player's shoulder, looking at the opponent; closes in as the gap closes
+const CAM_MODES = ['cine', 'side', 'follow']
+let camMode = CAM_MODES.indexOf(new URLSearchParams(location.search).get('cam')) + 1 ? new URLSearchParams(location.search).get('cam') : 'cine'
+const camPos = new THREE.Vector3(), camTgt = new THREE.Vector3(), wantPos = new THREE.Vector3(), wantTgt = new THREE.Vector3(), headV = new THREE.Vector3()
+let camReady = false
+function cycleCamera() {
+  camMode = CAM_MODES[(CAM_MODES.indexOf(camMode) + 1) % CAM_MODES.length]
+  controls.enabled = camMode === 'side'
+  if (camMode === 'side') {   // hand the mouse back, framed on the action
+    const mid = B ? (A.sim.x + B.sim.x) / 2 : A.sim.x + 0.5
+    controls.target.set(mid, 1.1, 0); camera.position.set(mid + 0.9, 1.9, 3.0); controls.update()
+  }
+  camReady = false
+}
+const headOf = bx => headV.copy(bx.b.head.translation())
+function updateCamera(dt) {
+  if (camMode === 'side') {   // the old behaviour: keep the action centred, leave the orbit to the mouse
+    const mid = B ? (A.sim.x + B.sim.x) / 2 : A.sim.x + 0.5
+    const dx = (mid - controls.target.x) * Math.min(1, dt * 3)
+    controls.target.x += dx; camera.position.x += dx; controls.update()
+    return
+  }
+  const down = boxers.find(b => b.sim.state === 'down')
+  const gap = B ? Math.abs(B.sim.x - A.sim.x) : 1
+  if (camMode === 'follow') {
+    // far enough back and out to the side that his own head and shoulder don't fill the frame, looking
+    // at the space between the two of them so you can read the punches coming back
+    const h = headOf(A), oh = B ? B.b.head.translation() : { x: A.sim.x + 1.2, y: 1.5 }
+    wantTgt.set(h.x * 0.35 + oh.x * 0.65, oh.y + 0.05, 0)
+    wantPos.set(h.x - A.facing * (1.95 + gap * 0.45), h.y + 0.6, 1.5)
+  } else {   // cine
+    const mid = B ? (A.sim.x + B.sim.x) / 2 : A.sim.x + 0.45
+    wantTgt.set(mid, 1.32, 0)
+    wantPos.set(mid + A.facing * 0.75, 1.72, 2.45 + gap * 0.25)
+    if (down) {   // stay with the man on the canvas: low and close
+      const h = headOf(down)
+      wantTgt.set((h.x + down.sim.x) / 2, h.y + 0.25, down.hips.translation().z * 0.5)
+      wantPos.set(h.x - down.facing * 1.15, 0.95, 1.65)
+    }
+  }
+  if (!camReady) { camPos.copy(wantPos); camTgt.copy(wantTgt); camReady = true }
+  const k = 1 - Math.exp(-dt / (down ? 0.35 : 0.5))   // lag behind the action instead of snapping to it
+  camPos.lerp(wantPos, k); camTgt.lerp(wantTgt, k)
+  camera.position.copy(camPos); camera.lookAt(camTgt); controls.target.copy(camTgt)
+}
+controls.enabled = camMode === 'side'
+
 // ---------- source model, posed in the guard ----------
 const loader = new FBXLoader()
 const CHAR = new URLSearchParams(location.search).get('char') || 'Y Bot'   // ?char=Ch45_nonPBR … any Mixamo character in models/ (the big ones are not in git)
@@ -712,6 +762,7 @@ addEventListener('keydown', e => {
   if (e.repeat) return
   keys[e.key.toLowerCase()] = true
   if (e.key.toLowerCase() === 'r') rematch()
+  if (e.key.toLowerCase() === 'c') cycleCamera()
   if (e.key === 'ArrowLeft') queued = { punch: e.shiftKey ? 'leadupper' : keys[' '] ? 'leadhook' : 'jab', hand: 'L' }   // 5 / 3 / 1
   if (e.key === 'ArrowRight') queued = { punch: e.shiftKey ? 'upper' : keys[' '] ? 'hook' : 'cross', hand: 'R' }      // 6 / 4 / 2
 })
@@ -837,16 +888,14 @@ function frame(dt) {
   }
   syncBones(A); if (B) syncBones(B)
   if (ball) { const t = ball.translation(); ballMesh.position.set(t.x, t.y, t.z) }
-  const mid = B ? (A.sim.x + B.sim.x) / 2 : A.sim.x + 0.5
-  const dx = (mid - controls.target.x) * Math.min(1, dt * 3)
-  controls.target.x += dx; camera.position.x += dx; controls.update()
+  updateCamera(dt)
   const st = s => `${s.state}${s.state === 'punch' ? ':' + punchPhase(s) : ''}`
   const DEBUG = !B || new URLSearchParams(location.search).has('debug')
   ui.className = DEBUG ? '' : 'hint'
-  ui.textContent = !DEBUG ? `A/D move · S guard · ← jab · → cross · Space+←/→ hooks · Shift+←/→ uppercuts · R rematch   (AI level ${AI_LEVEL}: ?ai=1–3)` : (B
+  ui.textContent = !DEBUG ? `A/D move · S guard · ← jab · → cross · Space+←/→ hooks · Shift+←/→ uppercuts · R rematch · C camera (${camMode})   (AI level ${AI_LEVEL}: ?ai=1–3)` : (B
     ? `M2 legs+hips mocap   A hp ${A.sim.hp.toFixed(0)} st ${A.sim.stamina.toFixed(0)} ${st(A.sim)}   |   B hp ${B.sim.hp.toFixed(0)} ${st(B.sim)}\n`
     : `SOLO — target ball   st ${A.sim.stamina.toFixed(0)} ${st(A.sim)}   thrown ${A.sim.stats.thrown}  hit ${ballHits}\n`) +
-    `last hit: ${lastHit}\nA/D move  S guard  ← jab(1)  → cross(2)  Space+← lead hook(3)  Space+→ rear hook(4)  Shift+← lead uppercut(5)  Shift+→ rear uppercut(6)  R rematch` +
+    `last hit: ${lastHit}\nA/D move  S guard  ← jab(1)  → cross(2)  Space+← lead hook(3)  Space+→ rear hook(4)  Shift+← lead uppercut(5)  Shift+→ rear uppercut(6)  R rematch  C camera` +
     (B ? `   (B punches back on its own)` : `   ↑/↓ ball height  [ ] ball distance (${(ballHome.x - A.sim.x).toFixed(2)} m)`)
   const dn = boxers.find(b => b.sim.state === 'down')
   if (dn && dn.sim.stateTime >= 1) {   // referee's count in sim time: up at 8, out at 10
@@ -861,7 +910,7 @@ function frame(dt) {
   draw()
 }
 window.__frame = frame
-window.__rag = { world, A, B, P, M, camera, controls, RAPIER, punchPhase, get ball() { return ball }, get ballHits() { return ballHits }, ballHome, clips, fx, match, hitLog }
+window.__rag = { world, A, B, P, M, camera, controls, RAPIER, punchPhase, get ball() { return ball }, get ballHits() { return ballHits }, ballHome, clips, fx, match, hitLog, get camMode() { return camMode }, cycleCamera }
 window.__loadClip = async f => {   // debug: load+retarget any fbx clip for scrubbing
   const c = (await loader.loadAsync('models/' + f + '.fbx')).animations[0]
   c.tracks.forEach(t => { t.name = t.name.replace(/^mixamorig\d*/, prefix) })
