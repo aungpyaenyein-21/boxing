@@ -8,6 +8,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import RAPIER from 'rapier'
 import { PUNCH, C } from './sim/constants.js?v=2'
 import { makeBoxer as makeSim, stepBoxer, punchPhase, resolveHit } from './sim/combat.js?v=2'
+import { createFx } from './fx.js?v=6'
 
 await RAPIER.init()
 const ui = document.getElementById('ui')
@@ -84,6 +85,7 @@ const P = {
   lunge: 0.16, lungeJab: 0.12,                                             // hips step in during a punch (m) — Punchers cross ≈ 20–30cm (less here: the kinematic hips drag the torso)
   through: 0.26, throughClipHook: 0.3, clipDamp: 0, clipRate: 1.25, hookArc: 0.45,
   upperUnder: 0.28, upperThrough: 0.22, upperBack: 0.04, upperSplit: 0.45, upperYaw: 45, upperRange: 0.32, lungeUpperMin: 0.1, lungeUpperMax: 0.4, upperNear: 0.22, upperStepT: 0.6, upperMul: 1.3, upperUpright: 0.8, upperFollow: 0.3, upperReach: 0.38, upperRelax: 0.3,   // uppercut: under the chin by upperSplit of the drive, then straight up through it
+  fxStop: 1, fxShake: 1, fxVol: 0.5,   // impact pack (fx.js): hit-stop / camera shake / sound — 0 turns one off
   kY: 2.5, dY: 40, aimSide: 0, aimLead: 1.5, holdDist: 0.1, easeCross: 0.9, hookLead: 45, hookPast: 50, hookHold: 60, hookD: 30, hookGate: 0.65, hookRmin: 0.32, hookRmax: 0.5,                 // straight-punch aim offset to the glove's own side; brake only within holdDist of the target; rear-hook sweep ease + max arc radius                                             // punch-through depth (straightens the elbow), hook side offset
   hookWind: 0.35, hookFollow: 0.5, hookYaw: 50,                            // hook: glove pulled back+out on windup, swings past the target, torso rotates more
   hookR: 0.46, hookRrear: 0.58, hookElbow: 0.8, hookSweep: [-20, 120],     // hook = glove on an arc around the shoulder; lead hook tight (elbow ~90°), rear hook wider (arm nearly straight, Punchers)
@@ -98,6 +100,7 @@ const P = {
   unwindRelax: 1, unwindExtra: 0.3, unwindRate: 5, maxLean: 18, unwindDamp: 2.5,   // after a punch: spine STIFFER so the torso rides the hips back instead of lagging (a lagging torso reads as a shove), slow hips return
 }
 for (const [k, v] of new URLSearchParams(location.search)) if (k in P && typeof P[k] === 'number') P[k] = +v   // ?kMul=2&limbMode=1 … tuning from the URL
+const fx = createFx(THREE, camera, P)
 const boxers = []
 
 function buildBoxer(x, facing, tint) {
@@ -310,6 +313,7 @@ function syncTarget(bx, dt) {
       bx.mirror = mirror
       // uppercuts are inside shots thrown with a bent arm, so the FEET close the distance: step in by however far the
       // target is beyond uppercut range (latched here — a target knocked away mid-punch must not drag the hips after it)
+      fx.whoosh(PUNCH[s.punch].dmgHead)
       const gap = bx.facing * (targetHead(bx).x - bx.sim.x)
       bx.lungeAmt = s.punch === 'jab' ? P.lungeJab : UPPER[s.punch] ? Math.min(P.lungeUpperMax, Math.max(P.lungeUpperMin, gap - P.upperRange)) : P.lunge
       playTarget(bx, name, clips[name].duration / (TOTAL(s.punch) * s.punchT) * (P.clipLed[s.punch] ? P.clipRate : 1), 0.06, true)
@@ -515,6 +519,7 @@ function onContact(h1, h2) {
       const s = g.boxer.sim
       if (s.state === 'punch' && !s.hitApplied && punchPhase(s) !== 'windup' && g.hand === s.punchHand) {
         s.hitApplied = true; ballHits++; s.stats.landed++
+        fx.hit(PUNCH[s.punch].dmgHead * 0.8)
         lastHit = `${s.punch}${s.punchHand} hit the ball (${ballHits})`
       }
       continue
@@ -528,6 +533,7 @@ function onContact(h1, h2) {
     const J = r.dmg * P.hitImpulse * (r.blocked ? 0.3 : 1)
     const body = target === 'head' ? t.boxer.b.head : t.boxer.b.torso
     body.applyImpulse({ x: g.boxer.facing * J, y: J * 0.15, z: 0 }, true)
+    fx.hit(r.dmg / (r.blocked ? C.GUARD_FACTOR : 1), r.blocked)
     lastHit = `${g.boxer.idx === 0 ? 'A' : 'B'} ${s.punch}${s.punchHand} → ${target} ${r.dmg.toFixed(1)}${r.blocked ? ' (blocked)' : ''}${r.counter ? ' COUNTER' : ''}`
   }
 }
@@ -558,6 +564,7 @@ function syncBones(bx) {
 // ---------- input ----------
 const keys = {}; let queued = null
 addEventListener('keydown', e => {
+  fx.unlock()   // browsers only let audio start from a user gesture
   if ([' ', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault()
   if (e.repeat) return
   keys[e.key.toLowerCase()] = true
@@ -583,7 +590,9 @@ function cpuInput(dt) {   // dummy: jab when in range every 1.6s
 // ---------- loop ----------
 let acc = 0
 const clock = new THREE.Clock()
+const draw = () => { fx.apply(); renderer.render(scene, camera); fx.restore() }
 function frame(dt) {
+  if (fx.step(dt)) { draw(); return }   // hit-stop: the world holds still for a few frames, only the effects move
   const inA = { move: (keys.d ? 1 : 0) - (keys.a ? 1 : 0), guard: !!keys.s, lean: !!keys.w, punch: queued && queued.punch, hand: queued && queued.hand }
   stepBoxer(A.sim, inA, dt); if (B) stepBoxer(B.sim, cpuInput(dt), dt); queued = null
   if (B && B.sim.x - A.sim.x < C.MIN_GAP) { const c = (A.sim.x + B.sim.x) / 2; A.sim.x = c - C.MIN_GAP / 2; B.sim.x = c + C.MIN_GAP / 2 }
@@ -647,10 +656,10 @@ function frame(dt) {
     : `SOLO — target ball   st ${A.sim.stamina.toFixed(0)} ${st(A.sim)}   thrown ${A.sim.stats.thrown}  hit ${ballHits}\n`) +
     `last hit: ${lastHit}\nA/D move  S guard  ← jab(1)  → cross(2)  Space+← lead hook(3)  Space+→ rear hook(4)  Shift+← lead uppercut(5)  Shift+→ rear uppercut(6)` +
     (B ? `   (B punches back on its own)` : `   ↑/↓ ball height  [ ] ball distance (${(ballHome.x - A.sim.x).toFixed(2)} m)`)
-  renderer.render(scene, camera)
+  draw()
 }
 window.__frame = frame
-window.__rag = { world, A, B, P, M, camera, controls, RAPIER, punchPhase, get ball() { return ball }, get ballHits() { return ballHits }, ballHome, clips }
+window.__rag = { world, A, B, P, M, camera, controls, RAPIER, punchPhase, get ball() { return ball }, get ballHits() { return ballHits }, ballHome, clips, fx }
 window.__loadClip = async f => {   // debug: load+retarget any fbx clip for scrubbing
   const c = (await loader.loadAsync('models/' + f + '.fbx')).animations[0]
   c.tracks.forEach(t => { t.name = t.name.replace(/^mixamorig\d*/, prefix) })

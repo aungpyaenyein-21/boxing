@@ -205,3 +205,14 @@ Source clips: `models/left uppercut.fbx` (f16–40) and `models/right uppercut.f
 - The rise is keyed to the fist being **under** the target (`upperNear` 0.22 m horizontally, latched) rather than to a timer — on a timer the rear fist was already above chin height when it arrived and hit the ball downward from the front. The follow-through is damped so the arm doesn't shoot out straight overhead.
 - Result: both uppercuts land from 0.55 to 0.85 m at full and low stamina and send the ball upward (≈3–5 m/s). Duel, passive opponent: 12.1 / 14.4 to the head, 3 of 3 each.
 - Harnesses: `dev/trace_upper.js` (path/shape), `dev/sweep_upper.js` (hit/miss across distances and stamina).
+
+---
+
+# Impact pack (fx.js) — 2026-09-19
+
+What makes a landed punch feel like one; nothing here touches the physics. Power = sim damage (≈4 jab … 16 rear hook), blocked hits count half.
+- **Hit-stop**: the whole frame loop (sim + physics) holds for `0.02 + 0.085·k` s — ≈35 ms for a jab, ≈105 ms for a rear hook. Input stays queued through the freeze.
+- **Camera shake**: decaying jolt (τ 70 ms, up to 7 cm), added right before the render and removed right after, so OrbitControls and the follow-cam never see it.
+- **No visual flash.** A burst sprite at the glove and an emissive blink on the victim were both tried; the user wanted neither.
+- **Sound**: synthesized with WebAudio, no assets — noise crack through a lowpass + a sine thud dropping to 42 Hz on a hit (duller when blocked), a quiet band-passed whoosh when a punch is thrown. The AudioContext is created on the first key press (browser gesture rule).
+- Knobs (URL-tunable, 0 = off): `fxStop`, `fxShake`, `fxVol`. Solo ball hits use 0.8 × the punch's table damage.
