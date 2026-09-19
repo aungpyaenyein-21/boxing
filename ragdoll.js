@@ -155,6 +155,11 @@ function buildBoxer(x, facing, tint) {
   bx.hipsLocal = hp.x - x
   bx.hipsY = hp.y
   bx.hips = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(hp.x, hp.y, hp.z))
+  // Rapier never refreshes a position-based kinematic body's world centre of mass: it stays where the body was CREATED.
+  // Every hip turn then pivoted about that stale point and gave the spine joint a spurious velocity ω × (offset), growing as
+  // the boxer walked away from its corner (the rear hook landed at f15 near the start position, late or not at all 2 m away).
+  // The tiny non-colliding ball gives the body mass properties; the substep loop recomputes them (= refreshes the COM).
+  world.createCollider(RAPIER.ColliderDesc.ball(0.05).setDensity(1).setCollisionGroups(0).setSensor(true), bx.hips)
   seg('torso', bone('Spine1'), bone('Neck'), 0.13, { density: 1400 })
   seg('head', bone('Head'), bone('HeadTop_End'), 0.10, { density: 1000 })
   seg('upperL', bone('LeftArm'), bone('LeftForeArm'), 0.05, { part: 'arm' })
@@ -627,6 +632,7 @@ function frame(dt) {
       const t = ball.translation(), v = ball.linvel()
       ball.applyImpulse({ x: ((ballHome.x - t.x) * 60 - v.x * 4) * DT, y: ((ballHome.y - t.y) * 60 - v.y * 4 + ball.mass() * 9.81) * DT, z: ((ballHome.z - t.z) * 60 - v.z * 4) * DT }, true)
     }
+    for (const bx of boxers) bx.hips.recomputeMassPropertiesFromColliders()   // keep the kinematic hips' COM under the hips (see buildBoxer)
     world.step(events); acc -= DT
     events.drainCollisionEvents((h1, h2, started) => { if (started) onContact(h1, h2) })
   }
