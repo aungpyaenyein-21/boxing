@@ -105,6 +105,16 @@ const idle = { move: 0, guard: false, lean: false, punch: null }
   assert(Math.abs(r.dmg - C.DAMAGE_SCALE * PUNCH.hook.dmgBody * (0.75 + 85 / 400)) < 1e-9)
 }
 
+// --- moving: forward at MOVE_SPEED, retreat slower, guard roots you
+{
+  const b = makeBoxer(0, 1)
+  stepBoxer(b, { ...idle, move: 1 }, dt); assert(Math.abs(b.vx - C.MOVE_SPEED) < 1e-9)
+  stepBoxer(b, { ...idle, move: -1 }, dt); assert(Math.abs(b.vx + C.MOVE_SPEED_BACK) < 1e-9)
+  stepBoxer(b, { ...idle, move: 1, guard: true }, dt); assert.equal(b.vx, 0)
+  const back = makeBoxer(1, -1)   // the boxer on the right: -1 is his forward
+  stepBoxer(back, { ...idle, move: -1 }, dt); assert(Math.abs(back.vx + C.MOVE_SPEED) < 1e-9)
+}
+
 // --- the guard is not a force field: what the punch met decides
 {
   const mk = punch => { const att = makeBoxer(0), def = makeBoxer(0.6); def.guard = true; tryPunch(att, punch); att.stateTime = PUNCH[punch].windup + 0.01; return [att, def] }

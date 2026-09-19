@@ -35,7 +35,8 @@ const CHAR = new URLSearchParams(location.search).get('char') || 'Y Bot'   // ?c
 const src = await loader.loadAsync(`models/${CHAR}.fbx`)
 let prefix = 'mixamorig'
 src.traverse(o => { const m = o.name.match(/^(mixamorig\d*)Hips$/); if (m) prefix = m[1] })
-const CLIP_FILES = { idle: 'Idle', block: 'Center Block', jab: 'left jab', cross: 'Cross Punch', hookR: 'Hook Punch', hookL: 'left hook', upperL: 'left uppercut', upperR: 'right uppercut', ko: 'Knocked Out', getup: 'Getting Up' }
+const CLIP_FILES = { idle: 'Idle', block: 'Center Block', jab: 'left jab', cross: 'Cross Punch', hookR: 'Hook Punch', hookL: 'left hook', upperL: 'left uppercut', upperR: 'right uppercut', ko: 'Knocked Out', getup: 'Getting Up',
+  stepF: 'Short Step Forward', stepB: 'Step Backward' }
 const clips = {}
 for (const [n, f] of Object.entries(CLIP_FILES)) {
   const c = (await loader.loadAsync('models/' + f + '.fbx')).animations[0]
@@ -48,6 +49,11 @@ clips.hookR = THREE.AnimationUtils.subclip(clips.hookR, 'hookR', 18, 52, 30)   /
 // new Mixamo 'left jab' / 'left hook' (2026-09-13): strike spans measured on the target skeleton
 clips.jab = THREE.AnimationUtils.subclip(clips.jab, 'jab', 4, 22, 30)      // extension peaks f10–12
 clips.hookL = THREE.AnimationUtils.subclip(clips.hookL, 'hookL', 6, 30, 30) // load f8–12, swing across f14–18, settle f30
+// footwork: both step clips start and end in the stance, so they loop. Their own root motion says how fast they carry
+// the body (forward 0.54 m/s, back 0.37 m/s); playing them at speed/clipSpeed keeps the feet planted on the ground
+// instead of skating. Root motion itself is discarded — the sim owns x.
+const clipSpeed = name => { const t = clips[name].tracks.find(t => t.name === prefix + 'Hips.position'), v = t.values, n = v.length / 3 - 1
+  return Math.hypot(v[n * 3] - v[0], v[n * 3 + 2] - v[2]) * 0.01 / clips[name].duration }
 // knockdown: 'Knocked Out' stands still for 1.2 s, then staggers back ≈1.3 m and drops onto its back (lying by f100);
 // 'Getting Up' lies on its back until f72, stands by f180. Both carry root motion in the Hips position track.
 clips.ko = THREE.AnimationUtils.subclip(clips.ko, 'ko', 40, 168, 30)
@@ -152,7 +158,7 @@ function buildBoxer(x, facing, tint) {
   const actions = {}
   for (const n of Object.keys(clips)) {
     actions[n] = mixer.clipAction(clips[n])
-    if (n !== 'idle' && n !== 'block') { actions[n].setLoop(THREE.LoopOnce); actions[n].clampWhenFinished = true }
+    if (n !== 'idle' && n !== 'block' && n !== 'stepF' && n !== 'stepB') { actions[n].setLoop(THREE.LoopOnce); actions[n].clampWhenFinished = true }
   }
   actions.idle.timeScale = P.idleSpeed
   actions.idle.play(); mixer.update(0); tgt.updateMatrixWorld(true)
@@ -161,8 +167,8 @@ function buildBoxer(x, facing, tint) {
   const follow = FOLLOW.map(n => ({ b: bone(n), t: tbone(n) })).filter(f => f.b && f.t)
   const hipsRestY = bone('Hips').position.y
   const hipsQ0 = bone('Hips').getWorldQuaternion(new THREE.Quaternion())
-  const bx = { model, facing, parts: [], motors: [], b: {}, sim: makeSim(x), stun: 1, arm: { L: 1, R: 1 }, idx: boxers.length,
-    tgt, mixer, actions, cur: 'idle', mirror: false, lungeX: 0, follow, hipsRestY, hipsQ0, hipsDelta: new THREE.Quaternion() }
+  const bx = { model, facing, parts: [], motors: [], b: {}, sim: makeSim(x, facing), stun: 1, arm: { L: 1, R: 1 }, idx: boxers.length,
+    tgt, mixer, actions, cur: 'idle', mirror: false, lungeX: 0, stepX: 0, follow, hipsRestY, hipsQ0, hipsDelta: new THREE.Quaternion() }
   const group = (1 << bx.idx) << 16 | (0xffff & ~(1 << bx.idx))   // collide only with the other boxer
 
   function seg(name, boneA, boneB, radius, opts = {}) {
@@ -274,6 +280,20 @@ world.createCollider(RAPIER.ColliderDesc.cuboid(30, 0.05, 30).setTranslation(0, 
 const hipsTracks = name => { const c = clips[name], n = prefix + 'Hips'
   return { pos: c.tracks.find(t => t.name === n + '.position').createInterpolant(), quat: c.tracks.find(t => t.name === n + '.quaternion').createInterpolant(), dur: c.duration } }
 const KO = hipsTracks('ko'), GU = hipsTracks('getup')
+const STEP_SPEED = { stepF: clipSpeed('stepF'), stepB: clipSpeed('stepB') }
+const STEP = { stepF: hipsTracks('stepF'), stepB: hipsTracks('stepB') }
+// A step clip does not travel at a constant speed — it hangs, then drives. The sim moves x linearly, so the difference
+// showed up as the planted foot skating (0.45 m over a 1.5 m walk). Shift the body by that difference: sim.x stays the
+// average, the feet stay on the ground. It is periodic and ±6 cm, so nothing jumps at the loop point.
+function stepOffset(bx) {
+  const trk = STEP[bx.cur]; if (!trk) return 0
+  const t = Math.min(bx.actions[bx.cur].time, trk.dur - 1e-4)
+  // NOTE evaluate() hands back the same buffer every call — read each sample before taking the next
+  const at = u => { const v = trk.pos.evaluate(u); return [v[0], v[2]] }
+  const p0 = at(0), p = at(t), pE = at(trk.dur - 1e-4)
+  const d = Math.hypot(p[0] - p0[0], p[1] - p0[1]), D = Math.hypot(pE[0] - p0[0], pE[1] - p0[1])
+  return (d - D * t / trk.dur) * 0.01 * (bx.cur === 'stepF' ? 1 : -1)
+}
 const kp = new THREE.Vector3(), kq = new THREE.Quaternion(), gp = new THREE.Vector3(), gq = new THREE.Quaternion(), kyaw = new THREE.Quaternion(), kv = new THREE.Vector3(), Y_UP = new THREE.Vector3(0, 1, 0)
 const clamp01 = x => Math.max(0, Math.min(1, x)), wrapPi = a => Math.atan2(Math.sin(a), Math.cos(a))
 function hipsAt(bx, trk, t, outP, outQ) {   // clip hips at time t → world position + rotation delta from the guard pose (for this boxer's facing)
@@ -413,7 +433,10 @@ function syncTarget(bx, dt) {
     }
   } else {
     bx.mirror = false
-    playTarget(bx, 'idle', 1, 0.25)   // slow fade back: a snap to the idle pose after a punch reads as a stagger
+    // walking: the step clip plays at the rate that matches the ground speed, so the feet plant instead of skating
+    const step = s.state === 'idle' && s.vx ? (Math.sign(s.vx) === bx.facing ? 'stepF' : 'stepB') : null
+    if (step) { bx.actions[step].timeScale = Math.abs(s.vx) / STEP_SPEED[step]; playTarget(bx, step, bx.actions[step].timeScale, 0.15) }
+    else playTarget(bx, 'idle', 1, bx.cur === 'stepF' || bx.cur === 'stepB' ? 0.18 : 0.25)   // slow fade back: a snap to the idle pose after a punch reads as a stagger
   }
   bx.mixer.update(dt); bx.tgt.updateMatrixWorld(true)
   // lunge: hips step in during windup+live, back during recovery
@@ -427,6 +450,7 @@ function syncTarget(bx, dt) {
     want = amount * (t < tl ? smooth(Math.min(1, t / tl)) : t < tEnd ? 1 : 1 - smooth(Math.min(1, (t - tEnd) / (tr + P.unwindExtra))))
   }
   bx.lungeX += (want - bx.lungeX) * Math.min(1, dt * (want > bx.lungeX ? 20 : P.unwindRate))
+  bx.stepX += (stepOffset(bx) - bx.stepX) * Math.min(1, dt * 14)   // eased so it fades out with the clip
 }
 
 // ---------- guard: gloves at the chin (Punchers stance) ----------
@@ -660,7 +684,7 @@ function onContact(h1, h2) {
 // ---------- bone follow ----------
 const bm = new THREE.Matrix4(), pm = new THREE.Matrix4(), lm = new THREE.Matrix4(), tq = new THREE.Quaternion(), ts = new THREE.Vector3(), tvv = new THREE.Vector3()
 function syncBones(bx) {
-  bx.model.position.x = bx.sim.x + bx.facing * bx.lungeX + (bx.down ? bx.kdX : 0); bx.model.position.z = bx.down ? bx.kdZ : 0
+  bx.model.position.x = bx.sim.x + bx.facing * (bx.lungeX + bx.stepX) + (bx.down ? bx.kdX : 0); bx.model.position.z = bx.down ? bx.kdZ : 0
   for (const f of bx.follow) {
     if (!P.followLegs) break
     if (f.b.name.endsWith('Hips')) {
@@ -708,7 +732,7 @@ function onPhase(from, to) {
   if (to === 'over') fx.bell(3)
 }
 function rematch() {   // fresh fight: everything the sim tracks, back in the corners
-  for (const bx of boxers) Object.assign(bx.sim, makeSim(bx === A ? -1 : 1))
+  for (const bx of boxers) { Object.assign(bx.sim, makeSim(bx === A ? -1 : 1, bx.facing)); bx.stepX = 0 }
   if (match) { Object.assign(match, makeMatch(), { boxers: [A.sim, B.sim] }); ai = makeAI(AI_LEVEL); introT = 1.6; fx.bell() }
   for (const bx of boxers) teleport(bx)
   lastHit = ''; slowT = 0
@@ -768,7 +792,7 @@ function frame(dt) {
     bx.bobY = (th.position.y - bx.hipsRestY) * 0.01 * P.bobGain - crouch - (bx.sim.guard ? P.blockCrouch : 0)
     const bob = bx.bobY
     if (down) { knockdownPose(bx); bx.kdX = kp.x; bx.kdZ = kp.z; bx.bobY = kp.y }
-    const hx = bx.sim.x + bx.hipsLocal + bx.facing * bx.lungeX + (down ? kp.x : 0), hy = bx.hipsY + (down ? kp.y : bob), hz = down ? kp.z : 0
+    const hx = bx.sim.x + bx.hipsLocal + bx.facing * (bx.lungeX + bx.stepX) + (down ? kp.x : 0), hy = bx.hipsY + (down ? kp.y : bob), hz = down ? kp.z : 0
     bx.hips.setNextKinematicTranslation({ x: hx, y: hy, z: hz })
     if (down && !bx.thudded && hy < 0.4) { bx.thudded = true; fx.thud() }   // the body meets the canvas
     // the hips are kinematic (infinite mass): when they accelerate, give every body the same Δv so the

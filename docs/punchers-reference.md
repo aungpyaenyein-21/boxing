@@ -255,3 +255,16 @@ User: "holding the guard means you can never be hit — but when the guarding ha
 
 # Gloves v3 — after the user's reference picture
 Fat padded pillow (lathe: near-straight sides, broad domed top), flattened front-to-back; a big thumb lobe (scaled sphere) bulging from the side, leaning in at its tip; wide wrist strap in the same red a shade darker with a darker band; no white trim.
+
+---
+
+# Footwork on the step clips — 2026-09-19
+
+`Short Step Forward` (1.0 s, carries the body 0.54 m/s) and `Step Backward` (0.9 s, 0.37 m/s). Both start and end in the stance, so they loop.
+- The clip plays at `speed / clipSpeed` — the ground speed sets the playback rate, so the feet plant instead of skating (forward ×1.83, back ×2.13).
+- A step clip does not travel at a constant speed: it hangs, then drives. The sim moves x linearly, so that difference showed up as the planted foot skating (0.45 m over a 1.5 m walk). `stepOffset` shifts the body by the clip's deviation from a constant speed (periodic, ±4 cm) — `sim.x` stays the average, the feet stay down. Measured slide dropped to 0.34 m per metre forward, 0.49 back; the raw clips slide 1.95 / 4.09 by the same metric, so what is left is the shuffle itself.
+- Root motion is otherwise discarded — the sim owns x.
+- `MOVE_SPEED` 1.4 → 1.0 to match the forward clip, and a new `MOVE_SPEED_BACK` 0.8: boxers retreat slower than they advance. Sim boxers now carry `facing`, so "forward" means toward the opponent for either corner.
+- The AI steps with the same clips (measured: 82 frames forward / 69 back over 25 s).
+- Harness: `dev/walk_test.js`.
+- Gotcha: `KeyframeTrack.createInterpolant().evaluate()` returns the SAME buffer every call — read each sample out before taking the next, or every sample compares equal (this silently zeroed `stepOffset` at first).

@@ -17,7 +17,8 @@ export const C = {
   GUARD_PARTIAL: 0.5,    // a punch that got through / round the guard after touching it
   GUARD_STAMINA: 7,      // defender pays this per blocked punch
   MOMENTUM_K: 0.35,      // ponytail: extra damage per m/s of forward speed, tune by feel in Phase 5
-  MOVE_SPEED: 1.4,
+  MOVE_SPEED: 1.0,       // forward; matched to the step clips so the feet don't skate (Short Step Forward travels 0.54 m/s)
+  MOVE_SPEED_BACK: 0.8,  // boxers retreat slower than they advance
   STAMINA_REGEN: 5,      // per second while idle/guarding
   HIT_TIME: 0.35,        // ponytail: stun length, tune once visible in Phase 2
   ROUNDS: 3,

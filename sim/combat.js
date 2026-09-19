@@ -3,9 +3,9 @@
 
 import { PUNCH, C } from './constants.js?v=2'
 
-export function makeBoxer(x) {
+export function makeBoxer(x, facing = x <= 0 ? 1 : -1) {
   return {
-    x, vx: 0,
+    x, vx: 0, facing,   // facing: +1 looks along +x, -1 along -x (the opponent's way)
     hp: 100, stamina: 100,
     state: 'idle',        // idle | punch | hit | down
     stateTime: 0,
@@ -87,7 +87,7 @@ export function stepBoxer(b, input, dt) {
   b.vx = 0
   if (b.state === 'idle') {
     if (!b.guard && input.move) {
-      b.vx = input.move * C.MOVE_SPEED
+      b.vx = input.move * (input.move === b.facing ? C.MOVE_SPEED : C.MOVE_SPEED_BACK)   // forward fast, backward slower
       b.x = Math.max(-C.RING_HALF, Math.min(C.RING_HALF, b.x + b.vx * dt))
     }
     if (input.punch && tryPunch(b, input.punch)) b.punchHand = input.hand === 'R' ? 'R' : 'L'
@@ -108,7 +108,7 @@ export function makeMatch() {
   return {
     round: 1, phase: 'fighting',   // fighting | rest | over
     clock: C.ROUND_SECONDS,
-    boxers: [makeBoxer(-1), makeBoxer(1)],
+    boxers: [makeBoxer(-1, 1), makeBoxer(1, -1)],
     winner: null, byKO: false,
   }
 }
