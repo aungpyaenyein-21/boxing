@@ -74,6 +74,10 @@ what *happens*. Legs follow the animation directly.
 
 Built with [three.js](https://threejs.org) and [Rapier](https://rapier.rs), loaded from a CDN.
 
+## License
+
+Code: [MIT](LICENSE). The files in `models/` are Mixamo assets under Adobe's terms, not the MIT license.
+
 ## Credits
 
 - Character and animations: [Mixamo](https://www.mixamo.com) (Adobe). These are covered by Adobe's Mixamo terms,
