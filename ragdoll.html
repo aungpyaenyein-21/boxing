@@ -1,41 +1,5 @@
 <!DOCTYPE html>
-<html lang="ja">
-<head>
 <meta charset="utf-8">
 <title>Boxing</title>
-<style>
-  body { margin:0; background:#f2f2f5; color:#222; font:13px/1.6 monospace; overflow:hidden }
-  #ui { position:fixed; top:10px; left:10px; z-index:2; white-space:pre }
-  #ui.hint { top:auto; bottom:10px; opacity:.55; font-size:12px }
-  #hud { position:fixed; top:14px; left:3%; right:3%; z-index:2; display:flex; align-items:flex-start; gap:18px; font:600 13px/1.2 system-ui,sans-serif; color:#223 }
-  #hud[hidden] { display:none }   /* display:flex above would otherwise beat the hidden attribute (solo mode) */
-  #hud .side { flex:1 } #hud .r { text-align:right }
-  #hud .name { letter-spacing:.08em; margin-bottom:4px; display:flex; justify-content:space-between } #hud .r .name { flex-direction:row-reverse }
-  #hud .kd { letter-spacing:.2em; color:#b23; font-size:11px }
-  #hud .bar { background:#0001; border-radius:3px; overflow:hidden; display:flex } #hud .l .bar { justify-content:flex-end }   /* what's left hugs the clock */
-  #hud .bar i { display:block; transition:width .12s linear }
-  #hud .hp { height:14px } #hud .hp i { background:#c8352e } #hud .st { height:5px; margin-top:4px } #hud .st i { background:#2a8f86 }
-  #hud .mid { width:120px; text-align:center } #round { font-size:11px; letter-spacing:.12em; opacity:.7 } #clock { font:700 26px/1.1 system-ui,sans-serif }
-  #ui button { margin:2px 4px 2px 0; padding:5px 10px; font:inherit; cursor:pointer;
-               background:#fff; color:#222; border:1px solid #bbb; border-radius:4px }
-</style>
-</head>
-<body>
-<div id="hud" hidden>
-  <div class="side l"><div class="name"><span>YOU</span><span class="kd" id="akd"></span></div><div class="bar hp"><i id="ahp"></i></div><div class="bar st"><i id="ast"></i></div></div>
-  <div class="mid"><div id="round">ROUND 1</div><div id="clock">1:30</div></div>
-  <div class="side r"><div class="name"><span>CPU</span><span class="kd" id="bkd"></span></div><div class="bar hp"><i id="bhp"></i></div><div class="bar st"><i id="bst"></i></div></div>
-</div>
-<div id="ui">loading...</div>
-<div id="big" style="position:fixed;left:0;right:0;top:22%;text-align:center;font:700 72px/1.15 system-ui,sans-serif;color:rgba(30,30,40,.78);white-space:pre-line;pointer-events:none"></div>
-<script type="importmap">
-{ "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
-  "fflate": "https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js",
-  "rapier": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.14.0/+esm"
-}}
-</script>
-<script type="module" src="./ragdoll.js?v=81"></script>
-</body>
-</html>
+<!-- the game moved to index.html; keep old links (and their ?solo / ?ai= options) working -->
+<script>location.replace('index.html' + location.search + location.hash)</script>
